@@ -7,11 +7,37 @@
  * (Node runtime). Web Crypto is the intersection.
  *
  * Token shape: `<issuedAtMs>.<base64url HMAC-SHA256 of issuedAtMs>`.
+ *
+ * Invite tokens (the shareable link) live here too and look the same, but the
+ * signed message is prefixed — see `INVITE_PREFIX` below.
  */
 
 export const SESSION_COOKIE = 'softball_session'
 
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Domain separator for invite tokens.
+ *
+ * Both token families are `<number>.<HMAC>` over the same secret, so without
+ * this the two would be interchangeable: an invite link's token pasted into
+ * the session cookie would authenticate forever, and a stolen session cookie
+ * would redeem as an invite. Signing `invite:<expiresAtMs>` instead of the
+ * bare number means a signature produced for one family can never validate
+ * against the other, whatever the number happens to be.
+ */
+const INVITE_PREFIX = 'invite:'
+
+/**
+ * Ceiling on how far ahead an invite may expire.
+ *
+ * The expiry is carried in the token and is therefore attacker-visible — but
+ * it is covered by the HMAC, so nobody can push it out without the secret.
+ * The cap is a guard against our own side: a bug (or a fat-fingered call)
+ * that mints a link good until the year 9999 is a permanent credential, and
+ * this refuses to honour one. Generous enough for the 30-day default.
+ */
+const MAX_INVITE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000
 
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET
@@ -103,5 +129,40 @@ export async function verifySession(token: string | undefined): Promise<boolean>
   if (!providedSignature) return false
 
   const expectedSignature = await sign(issuedAtRaw)
+  return constantTimeEqual(expectedSignature, providedSignature)
+}
+
+/**
+ * Signs an invite token that stops working at `expiresAtMs`.
+ *
+ * Deliberately signs whatever it is handed, including an expiry in the past
+ * or one absurdly far out — same reason `signSessionAt` takes an arbitrary
+ * time. All the refusing happens in `verifyInvite`, which is the side that
+ * faces untrusted input; keeping the signer dumb lets tests mint the bad
+ * tokens they need to prove the verifier rejects them.
+ */
+export async function signInvite(expiresAtMs: number): Promise<string> {
+  const signature = await sign(`${INVITE_PREFIX}${expiresAtMs}`)
+  return `${expiresAtMs}.${toBase64Url(signature)}`
+}
+
+export async function verifyInvite(token: string | undefined): Promise<boolean> {
+  if (!token) return false
+
+  const parts = token.split('.')
+  if (parts.length !== 2) return false
+  const [expiresAtRaw, signatureRaw] = parts
+
+  if (!/^\d+$/.test(expiresAtRaw)) return false
+  const expiresAtMs = Number(expiresAtRaw)
+  if (!Number.isSafeInteger(expiresAtMs)) return false
+
+  const remaining = expiresAtMs - Date.now()
+  if (remaining <= 0 || remaining > MAX_INVITE_LIFETIME_MS) return false
+
+  const providedSignature = fromBase64Url(signatureRaw)
+  if (!providedSignature) return false
+
+  const expectedSignature = await sign(`${INVITE_PREFIX}${expiresAtRaw}`)
   return constantTimeEqual(expectedSignature, providedSignature)
 }

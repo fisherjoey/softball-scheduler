@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { RULES } from '@/lib/rules/config'
+import { ShareAccess } from './ShareAccess'
 
 /**
  * The home screen doubles as the instructions.
@@ -125,6 +126,8 @@ export default function Home() {
           </p>
         </div>
       </details>
+
+      <ShareAccess />
     </main>
   )
 }

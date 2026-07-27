@@ -10,7 +10,9 @@ export default defineConfig({
     // global `afterEach`) unmounts components between tests. Without it,
     // component tests in the same file accumulate DOM nodes across tests.
     globals: true,
-    include: ['{lib,app,components}/**/*.test.{ts,tsx}'],
+    // `middleware.test.ts` is named explicitly because Next requires the file
+    // it tests to sit at the project root, outside the source folders.
+    include: ['{lib,app,components}/**/*.test.{ts,tsx}', 'middleware.test.ts'],
     // Database integration tests talk to a live DB and run only via `npm run test:db`.
     exclude: [
       '**/node_modules/**',
