@@ -115,7 +115,7 @@ export default async function GamesPage() {
                   href={`/games/${game.id}`}
                   className="flex min-h-11 flex-1 items-center justify-center rounded-md border-2 border-zinc-400 px-3 text-sm font-semibold text-zinc-700 dark:border-zinc-600 dark:text-zinc-300"
                 >
-                  {game.hasLineup ? 'Attendance' : 'Take attendance'}
+                  {game.presentCount > 0 ? 'Attendance' : 'Take attendance'}
                 </Link>
               </div>
             </div>
