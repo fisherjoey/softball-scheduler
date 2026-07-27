@@ -15,7 +15,7 @@ function nextTier(current: Tier | undefined): Tier | undefined {
 }
 
 const TIER_LABEL: Record<'unset' | Tier, string> = {
-  unset: 'not eligible',
+  unset: 'not selected',
   backup: 'backup',
   primary: 'primary',
 }
@@ -48,7 +48,7 @@ export function PositionChips({ value, onChange }: PositionChipsProps) {
         // (backup) state rather than collapsing it to true/false.
         const ariaPressed: 'true' | 'false' | 'mixed' =
           tier === 'primary' ? 'true' : tier === 'backup' ? 'mixed' : 'false'
-        const label = `${position} (${TIER_LABEL[tier ?? 'unset']})`
+        const label = `${position}, ${TIER_LABEL[tier ?? 'unset']}`
 
         const baseClasses =
           'flex h-11 min-w-11 items-center justify-center gap-1 rounded-full border-2 px-3 text-sm font-semibold transition-colors'
@@ -58,7 +58,7 @@ export function PositionChips({ value, onChange }: PositionChipsProps) {
             ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
             : tier === 'backup'
               ? 'border-zinc-900 bg-transparent text-zinc-900 dark:border-zinc-100 dark:text-zinc-100'
-              : 'border-zinc-300 bg-transparent text-zinc-400 dark:border-zinc-700 dark:text-zinc-500'
+              : 'border-zinc-300 bg-transparent text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'
 
         return (
           <button

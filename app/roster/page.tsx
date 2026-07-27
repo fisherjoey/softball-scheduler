@@ -45,7 +45,7 @@ export default async function RosterPage() {
 
       <section className="flex flex-col gap-3" aria-label="Active players">
         {active.length === 0 ? (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
             No active players yet. Add one above.
           </p>
         ) : (
@@ -55,7 +55,7 @@ export default async function RosterPage() {
 
       {inactive.length > 0 && (
         <details className="rounded-lg border border-zinc-300 dark:border-zinc-700">
-          <summary className="flex min-h-11 cursor-pointer select-none items-center px-4 py-3 text-base font-medium text-zinc-500 dark:text-zinc-400">
+          <summary className="flex min-h-11 cursor-pointer select-none items-center px-4 py-3 text-base font-medium text-zinc-600 dark:text-zinc-400">
             Inactive players ({inactive.length})
           </summary>
           <div className="flex flex-col gap-3 border-t border-zinc-200 p-4 dark:border-zinc-800">
