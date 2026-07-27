@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { buildBattingOrder } from './buildBattingOrder'
 import { isValidGenderPattern } from './genderPattern'
-import { mkPlayer, mkRoster } from './fixtures'
+import { mkRoster } from './fixtures'
 import type { BattingOrder, BattingSlot, PresentPlayer } from '@/lib/types'
 
 /** Narrows a BattingSlot to the 'player' variant without an `any` cast. */
