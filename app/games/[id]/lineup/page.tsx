@@ -35,14 +35,26 @@ export default async function LineupPage({ params }: { params: Promise<{ id: str
 
   return (
     <main className="flex flex-1 flex-col gap-6 px-4 py-6 sm:px-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-foreground">
-          Lineup — {formatDate(game.date)}
-          {game.opponent ? ` vs ${game.opponent}` : ''}
-        </h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          {present.length} present · {game.innings} innings
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl font-semibold text-foreground">
+            Lineup — {formatDate(game.date)}
+            {game.opponent ? ` vs ${game.opponent}` : ''}
+          </h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            {present.length} present · {game.innings} innings
+          </p>
+        </div>
+        {/* Only offered once something is saved: the print view reads from the
+            database, so it would be blank for an unsaved lineup. */}
+        {saved && (
+          <Link
+            href={`/games/${game.id}/lineup/print`}
+            className="flex h-11 items-center justify-center rounded-md border-2 border-zinc-400 px-4 text-sm font-semibold text-zinc-700 dark:border-zinc-600 dark:text-zinc-300"
+          >
+            Print / share
+          </Link>
+        )}
       </div>
 
       {present.length === 0 ? (
