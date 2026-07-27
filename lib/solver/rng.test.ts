@@ -11,9 +11,13 @@ describe('makeRng', () => {
   })
 
   it('differs across seeds', () => {
-    const a = Array.from({ length: 20 }, (_, i) => makeRng(1).next())
-    const b = Array.from({ length: 20 }, (_, i) => makeRng(2).next())
+    const r1 = makeRng(1)
+    const r2 = makeRng(2)
+    const a = Array.from({ length: 20 }, () => r1.next())
+    const b = Array.from({ length: 20 }, () => r2.next())
     expect(a).not.toEqual(b)
+    // The sequence must not collapse to a constant.
+    expect(new Set(a).size).toBeGreaterThan(1)
   })
 
   it('produces floats in [0, 1)', () => {
