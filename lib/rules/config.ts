@@ -57,4 +57,11 @@ export const SOLVER = {
   inningRetries: 20,
   /** Cap on enumerated batting-order gender patterns. */
   maxPatternCandidates: 2000,
+  /**
+   * Walk every combination when C(n, femaleSpots) is at or below this.
+   * Valid patterns are a vanishing fraction of the space at tight roster
+   * sizes, so random sampling can miss them entirely; exhaustive walking is
+   * the only way to guarantee we find one that exists.
+   */
+  exhaustiveEnumerationLimit: 1_000_000,
 } as const

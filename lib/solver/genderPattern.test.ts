@@ -90,4 +90,28 @@ describe('enumerateGenderPatterns', () => {
     const b = enumerateGenderPatterns(13, 4, makeRng(5))
     expect(a).toEqual(b)
   })
+
+  it('finds every valid pattern at the tight roster sizes', () => {
+    // n ≡ 1 (mod 3) are the hardest cases: valid patterns are a vanishing
+    // fraction of the combination space, so sampling can miss them entirely.
+    for (const n of [10, 13, 16, 19, 22]) {
+      const f = femaleSpotsRequired(n)
+      const patterns = enumerateGenderPatterns(n, f, makeRng(n))
+      expect(patterns.length, `n=${n}`).toBeGreaterThanOrEqual(n)
+      for (const p of patterns) expect(isValidGenderPattern(p)).toBe(true)
+    }
+  })
+
+  it('never returns empty across many seeds at the worst tested size', () => {
+    const f = femaleSpotsRequired(22)
+    for (let seed = 0; seed < 50; seed++) {
+      expect(enumerateGenderPatterns(22, f, makeRng(seed)).length, `seed=${seed}`).toBeGreaterThan(0)
+    }
+  })
+
+  it('stays deterministic after the change', () => {
+    const a = enumerateGenderPatterns(13, femaleSpotsRequired(13), makeRng(5))
+    const b = enumerateGenderPatterns(13, femaleSpotsRequired(13), makeRng(5))
+    expect(a).toEqual(b)
+  })
 })
