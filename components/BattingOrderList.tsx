@@ -1,10 +1,19 @@
 'use client'
 
-import type { BattingOrder, PresentPlayer } from '@/lib/types'
+import type { BattingOrder, PresentPlayer, Player } from '@/lib/types'
 
 export interface BattingOrderListProps {
   order: BattingOrder
   present: PresentPlayer[]
+  /**
+   * The full roster, used only to resolve names.
+   *
+   * Deliberately NOT `present`: a saved lineup references whoever was ticked
+   * present when it was generated, and attendance can change afterwards.
+   * Looking names up in `present` made those players render as raw UUIDs.
+   * Solver logic still uses `present` — this is display only.
+   */
+  roster: Player[]
 }
 
 /**
@@ -16,8 +25,8 @@ export interface BattingOrderListProps {
  * an OUT chip and a dashed border, and still shows its slot number, because
  * the umpire counts slots.
  */
-export function BattingOrderList({ order, present }: BattingOrderListProps) {
-  const byId = new Map(present.map((p) => [p.id, p]))
+export function BattingOrderList({ order, present, roster }: BattingOrderListProps) {
+  const byId = new Map(roster.map((p) => [p.id, p]))
   // Women may legally bat twice when the order needs more female slots than
   // there are women, so a name can repeat. Flag the repeat where it happens.
   const seen = new Set<string>()

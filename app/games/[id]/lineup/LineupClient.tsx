@@ -16,6 +16,7 @@ import type {
   FieldingGrid,
   Pin,
   Position,
+  Player,
   PresentPlayer,
   SlotHistory,
 } from '@/lib/types'
@@ -25,6 +26,15 @@ export interface LineupClientProps {
   innings: number
   /** Everyone ticked present, with their arrived/left innings. */
   present: PresentPlayer[]
+  /**
+   * The full roster, used only to resolve names.
+   *
+   * Deliberately NOT `present`: a saved lineup references whoever was ticked
+   * present when it was generated, and attendance can change afterwards.
+   * Looking names up in `present` made those players render as raw UUIDs.
+   * Solver logic still uses `present` — this is display only.
+   */
+  roster: Player[]
   /** Batting slots from recent games, so the order rotates. */
   history: SlotHistory[]
   /** A previously saved lineup, shown instead of generating a fresh one. */
@@ -76,8 +86,33 @@ function messageOf(error: unknown): string {
  * latency. The server action is reserved for the one thing that genuinely
  * needs the database — saving.
  */
-export function LineupClient({ gameId, innings, present, history, saved }: LineupClientProps) {
+export function LineupClient({
+  gameId,
+  innings,
+  present,
+  roster,
+  history,
+  saved,
+}: LineupClientProps) {
   const status = useMemo(() => validateRoster(present), [present])
+
+  /**
+   * A saved lineup is a snapshot: it names whoever was ticked present when it
+   * was generated. Change attendance afterwards and the saved grid still shows
+   * the old names, which silently disagrees with the roster the captain is
+   * looking at. Name them and say what to do rather than leaving it to be
+   * noticed at the diamond.
+   */
+  const staleNames = useMemo(() => {
+    if (!saved) return []
+    const presentIds = new Set(present.map((p) => p.id))
+    const nameOf = new Map(roster.map((p) => [p.id, p.name]))
+    const ids = new Set(saved.grid.assignments.flatMap((inning) => Object.values(inning)))
+    return [...ids]
+      .filter((id) => !presentIds.has(id))
+      .map((id) => nameOf.get(id) ?? id)
+      .sort((a, b) => a.localeCompare(b))
+  }, [saved, present, roster])
 
   const [pins, setPins] = useState<Pin[]>([])
   const [lockedThrough, setLockedThrough] = useState(0)
@@ -296,6 +331,21 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
         </button>
       </div>
 
+      {staleNames.length > 0 && (
+        <div
+          role="status"
+          className="rounded-lg border-2 border-amber-600 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500 dark:bg-amber-950 dark:text-amber-100"
+        >
+          <p className="font-semibold">This saved lineup is out of date.</p>
+          <p className="mt-1">
+            It still fields {staleNames.length}{' '}
+            {staleNames.length === 1 ? 'player who is' : 'players who are'} no longer marked
+            present: {staleNames.join(', ')}. Reshuffle to rebuild it from who is here now, or fix
+            attendance if they are actually playing.
+          </p>
+        </div>
+      )}
+
       <RosterStatusBanner
         status={{
           ...status,
@@ -343,6 +393,7 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
             )}
 
             <FieldingGridTable
+              roster={roster}
               grid={lineup.grid}
               present={present}
               pins={pins}
@@ -389,7 +440,7 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
             <h2 id="batting-heading" className="text-lg font-semibold text-foreground">
               Batting order
             </h2>
-            <BattingOrderList order={lineup.order} present={present} />
+            <BattingOrderList order={lineup.order} present={present} roster={roster} />
           </section>
 
           <section className="flex flex-col gap-3 pb-4" aria-labelledby="summary-heading">

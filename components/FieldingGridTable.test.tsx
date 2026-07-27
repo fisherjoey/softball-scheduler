@@ -25,11 +25,13 @@ function renderGrid(
     onAssign: (cell: GridCellRef, playerId: string) => void
     onCancel: () => void
   }> = {},
+  roster?: PresentPlayer[],
 ) {
   return render(
     <FieldingGridTable
       grid={grid}
       present={present}
+      roster={roster ?? present}
       pins={[]}
       selected={selected}
       lockedThrough={0}
@@ -149,5 +151,25 @@ describe('FieldingGridTable', () => {
     const card = screen.getByRole('region', { name: 'Inning 1 fielding' })
     expect(within(card).getByText(/Nobody/i)).toBeDefined()
     expect(within(card).queryByRole('list')).toBeNull()
+  })
+
+  it('shows a name for a fielder who is no longer marked present', () => {
+    // A saved lineup references whoever was present when it was generated.
+    // Attendance can change afterwards; those players must still render by
+    // name, not as a raw UUID. Regression: names were looked up in `present`.
+    // The default fixture names players the same as their ids, which would
+    // make "shows a name" and "shows an id" indistinguishable. Give them
+    // distinct names so the assertion means something.
+    const { present, grid } = setup(
+      Array.from({ length: 13 }, (_, i) => ({ name: `Player${i}` })),
+    )
+    const dropped = Object.values(grid.assignments[0])[0]
+    const stillPresent = present.filter((p) => p.id !== dropped)
+    const droppedPlayer = present.find((p) => p.id === dropped)!
+
+    renderGrid(stillPresent, grid, null, {}, present)
+
+    expect(screen.getAllByText(droppedPlayer.name).length).toBeGreaterThan(0)
+    expect(screen.queryByText(dropped)).toBeNull()
   })
 })

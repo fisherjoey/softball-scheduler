@@ -70,6 +70,7 @@ export default async function LineupPage({ params }: { params: Promise<{ id: str
           gameId={game.id}
           innings={game.innings}
           present={present}
+          roster={players}
           history={history}
           saved={saved}
         />

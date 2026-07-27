@@ -2,7 +2,14 @@
 
 import { useEffect, useRef } from 'react'
 import { isAvailable } from '@/lib/solver/buildFieldingGrid'
-import { POSITIONS, type FieldingGrid, type Pin, type Position, type PresentPlayer } from '@/lib/types'
+import {
+  POSITIONS,
+  type FieldingGrid,
+  type Pin,
+  type Player,
+  type Position,
+  type PresentPlayer,
+} from '@/lib/types'
 
 /** One cell of the grid. `inning` is 1-based. */
 export interface GridCellRef {
@@ -13,6 +20,15 @@ export interface GridCellRef {
 export interface FieldingGridTableProps {
   grid: FieldingGrid
   present: PresentPlayer[]
+  /**
+   * The full roster, used only to resolve names.
+   *
+   * Deliberately NOT `present`: a saved lineup references whoever was ticked
+   * present when it was generated, and attendance can change afterwards.
+   * Looking names up in `present` made those players render as raw UUIDs.
+   * Solver logic still uses `present` — this is display only.
+   */
+  roster: Player[]
   pins: Pin[]
   /** The cell whose player picker is open, if the captain has tapped one. */
   selected: GridCellRef | null
@@ -334,6 +350,7 @@ function PinButton({
 export function FieldingGridTable({
   grid,
   present,
+  roster,
   pins,
   selected,
   lockedThrough,
@@ -343,7 +360,7 @@ export function FieldingGridTable({
   onAssign,
   onCancel,
 }: FieldingGridTableProps) {
-  const nameOf = new Map(present.map((p) => [p.id, p.name]))
+  const nameOf = new Map(roster.map((p) => [p.id, p.name]))
   const femaleIds = new Set(present.filter((p) => p.isFemale).map((p) => p.id))
 
   const innings = Array.from({ length: grid.innings }, (_, i) => i + 1)
