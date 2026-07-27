@@ -30,8 +30,23 @@ interface RowState {
   leftInning: number | null
 }
 
+/**
+ * Roster players default to PRESENT on a game that has never been saved; subs
+ * default to absent.
+ *
+ * On a rec team most of the roster turns up most weeks, so starting everyone
+ * absent means tapping every name before the app stops reporting a forfeit —
+ * the common case costs the most work, and a fresh game greets you with a
+ * default warning you cannot act on. Starting present inverts that: untick the
+ * two people who texted. Subs stay absent because they are the exception by
+ * definition, and the solver deliberately keeps them off the field whenever
+ * roster players can cover.
+ *
+ * Once attendance has been saved, the saved values always win.
+ */
 function initialRowState(players: Player[], attendance: AttendanceRecord[]): Map<string, RowState> {
   const byId = new Map(attendance.map((a) => [a.playerId, a]))
+  const hasSavedAttendance = attendance.length > 0
   return new Map(
     players.map((p) => {
       const saved = byId.get(p.id)
@@ -43,7 +58,11 @@ function initialRowState(players: Player[], attendance: AttendanceRecord[]): Map
               arrivedInning: saved.arrivedInning,
               leftInning: saved.leftInning,
             }
-          : { isPresent: false, arrivedInning: 1, leftInning: null },
+          : {
+              isPresent: hasSavedAttendance ? false : !p.isSub,
+              arrivedInning: 1,
+              leftInning: null,
+            },
       ]
     }),
   )
@@ -182,6 +201,20 @@ export function AttendanceList({ gameId, innings, players, initialAttendance }: 
     })
   }
 
+  /** Bulk set, so a full roster is never sixteen taps in either direction. */
+  function setAll(isPresent: boolean, scope: 'roster' | 'everyone') {
+    setSaved(false)
+    setRows((prev) => {
+      const copy = new Map(prev)
+      for (const p of players) {
+        if (scope === 'roster' && p.isSub) continue
+        const current = copy.get(p.id)!
+        copy.set(p.id, { ...current, isPresent })
+      }
+      return copy
+    })
+  }
+
   function handleSave() {
     setError(null)
     startTransition(async () => {
@@ -208,6 +241,30 @@ export function AttendanceList({ gameId, innings, players, initialAttendance }: 
   return (
     <div className="flex flex-col gap-6">
       <RosterStatusBanner status={status} />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <p
+          className="mr-auto text-sm font-semibold text-zinc-700 dark:text-zinc-300"
+          aria-live="polite"
+        >
+          {present.length} here
+          {status.femaleCount > 0 && `, ${status.femaleCount} female`}
+        </p>
+        <button
+          type="button"
+          onClick={() => setAll(true, 'roster')}
+          className="h-11 rounded-md border-2 border-zinc-400 px-3 text-sm font-semibold text-zinc-700 dark:border-zinc-600 dark:text-zinc-300"
+        >
+          All roster here
+        </button>
+        <button
+          type="button"
+          onClick={() => setAll(false, 'everyone')}
+          className="h-11 rounded-md border-2 border-zinc-400 px-3 text-sm font-semibold text-zinc-700 dark:border-zinc-600 dark:text-zinc-300"
+        >
+          Clear all
+        </button>
+      </div>
 
       <section className="flex flex-col gap-3" aria-label="Roster attendance">
         {rosterPlayers.map((player) => (
