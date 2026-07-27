@@ -24,5 +24,5 @@ export async function middleware(request: NextRequest) {
 // slash, only `/i/<token>` gets through, and that route verifies the token
 // itself before it hands out a session.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.svg|manifest.webmanifest|login|i/).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|manifest.webmanifest|login|i/).*)'],
 }
