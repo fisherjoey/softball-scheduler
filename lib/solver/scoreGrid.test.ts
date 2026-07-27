@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { scoreGrid } from './scoreGrid'
-import { mkPlayer } from './validateRoster.test'
+import { mkPlayer } from './fixtures'
 import { WEIGHTS } from '@/lib/rules/config'
 import type { InningAssignment } from '@/lib/types'
 

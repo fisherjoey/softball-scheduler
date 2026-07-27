@@ -3,7 +3,7 @@ import fc from 'fast-check'
 import { buildFieldingGrid, inningStatus, isAvailable } from './buildFieldingGrid'
 import { scoreGrid } from './scoreGrid'
 import { validateRoster } from './validateRoster'
-import { mkPlayer, mkRoster } from './validateRoster.test'
+import { mkPlayer, mkRoster } from './fixtures'
 import { RULES } from '@/lib/rules/config'
 import { POSITIONS, type FieldingGrid, type PresentPlayer, type Position } from '@/lib/types'
 
