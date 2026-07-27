@@ -1,5 +1,7 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
+import { isAvailable } from '@/lib/solver/buildFieldingGrid'
 import { POSITIONS, type FieldingGrid, type Pin, type Position, type PresentPlayer } from '@/lib/types'
 
 /** One cell of the grid. `inning` is 1-based. */
@@ -12,19 +14,36 @@ export interface FieldingGridTableProps {
   grid: FieldingGrid
   present: PresentPlayer[]
   pins: Pin[]
-  /** The cell waiting for a swap partner, if the captain has picked one. */
+  /** The cell whose player picker is open, if the captain has tapped one. */
   selected: GridCellRef | null
   /** Innings 1..lockedThrough have been played and are read-only. */
   lockedThrough: number
   onSelect: (cell: GridCellRef) => void
   onTogglePin: (cell: GridCellRef) => void
   onSwap: (from: GridCellRef, to: GridCellRef) => void
+  /** Put this player in this cell. The picker's only outcome. */
+  onAssign: (cell: GridCellRef, playerId: string) => void
+  /** Close the picker without changing anything. */
+  onCancel: () => void
 }
 
 const DRAG_TYPE = 'text/plain'
 
 function sameCell(a: GridCellRef | null, b: GridCellRef): boolean {
   return a !== null && a.inning === b.inning && a.position === b.position
+}
+
+/**
+ * Who is available in one inning, split by whether they are playing it.
+ *
+ * "Available" and "present" are not the same thing once somebody arrives in
+ * the third or leaves after the fifth, and the difference matters here: a
+ * player who has gone home is not on the bench, they are not at the park.
+ * Offering them in the picker would only earn the captain a refusal.
+ */
+interface InningRoster {
+  fielding: Array<{ player: PresentPlayer; position: Position }>
+  bench: PresentPlayer[]
 }
 
 interface CellState {
@@ -34,6 +53,137 @@ interface CellState {
   pinned: boolean
   isSelected: boolean
   isFemale: boolean
+}
+
+/** The F/Sub markers, as words, for a `<select>` option's flat text. */
+function markerText(player: PresentPlayer): string {
+  const marks = [player.isFemale ? 'F' : null, player.isSub ? 'Sub' : null].filter(Boolean)
+  return marks.length === 0 ? '' : ` (${marks.join(', ')})`
+}
+
+/** The same markers as chips, for everywhere that is not an option element. */
+function MarkerChips({ player }: { player: PresentPlayer }) {
+  return (
+    <>
+      {player.isFemale && <Chip>F</Chip>}
+      {player.isSub && <Chip>Sub</Chip>}
+    </>
+  )
+}
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="ml-1 rounded-sm border border-current px-1 text-[10px] font-bold uppercase">
+      {children}
+    </span>
+  )
+}
+
+/**
+ * Everyone who could take this cell, as a native `<select>`.
+ *
+ * Native, not a custom sheet, for two reasons. Phones render a `<select>` as a
+ * full-screen picker with system-sized rows, which is the easiest thing in the
+ * world to hit one-handed on a diamond; and `<optgroup>` gives us "On the
+ * field" and "Bench" without a single line of positioning code that would then
+ * have to fight the grid's horizontal scroller.
+ *
+ * Options carry the player's current position, so choosing somebody already
+ * fielding reads as the exchange it is, and the F/Sub markers, so the captain
+ * can see before he taps whether the choice costs him a woman on the field.
+ */
+function PlayerPicker({
+  cell,
+  current,
+  roster,
+  onAssign,
+  onCancel,
+}: {
+  cell: GridCellRef
+  current: string
+  roster: InningRoster
+  onAssign: (cell: GridCellRef, playerId: string) => void
+  onCancel: () => void
+}) {
+  const ref = useRef<HTMLSelectElement>(null)
+
+  useEffect(() => {
+    const select = ref.current
+    if (!select) return
+    select.focus()
+    // The tap that opened this picker is still transient user activation, so
+    // browsers that implement showPicker() open the list immediately and the
+    // captain spends one tap instead of two. The rest just get focus, and a
+    // second tap opens it the ordinary way.
+    try {
+      ;(select as HTMLSelectElement & { showPicker?: () => void }).showPicker?.()
+    } catch {
+      // Not allowed here — focus is enough.
+    }
+  }, [])
+
+  return (
+    <>
+      <select
+        ref={ref}
+        value={current}
+        aria-label={`Who plays ${cell.position} in inning ${cell.inning}`}
+        onChange={(event) => onAssign(cell, event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onCancel()
+        }}
+        className="min-h-11 w-full min-w-0 max-w-56 flex-1 rounded-md border-2 border-zinc-900 bg-background px-2 py-1 text-sm font-medium text-foreground dark:border-zinc-100"
+      >
+        <optgroup label="On the field">
+          {roster.fielding.map(({ player, position }) => (
+            <option key={player.id} value={player.id}>
+              {player.name}
+              {markerText(player)} — {position}
+            </option>
+          ))}
+        </optgroup>
+        {roster.bench.length > 0 && (
+          <optgroup label="Bench">
+            {roster.bench.map((player) => (
+              <option key={player.id} value={player.id}>
+                {player.name}
+                {markerText(player)}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+      <button
+        type="button"
+        onClick={onCancel}
+        aria-label={`Cancel changing ${cell.position} in inning ${cell.inning}`}
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-zinc-300 text-base font-bold text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+      >
+        <span aria-hidden="true">✕</span>
+      </button>
+    </>
+  )
+}
+
+/** Who is sitting this inning, or a word to say that nobody is. */
+function BenchList({ bench }: { bench: PresentPlayer[] }) {
+  if (bench.length === 0) {
+    return (
+      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        Nobody — everybody available is on the field.
+      </p>
+    )
+  }
+  return (
+    <ul className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+      {bench.map((player) => (
+        <li key={player.id} className="flex items-center">
+          {player.name}
+          <MarkerChips player={player} />
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 /** The empty-cell placeholder: a position not in play that inning. */
@@ -49,8 +199,11 @@ function EmptyCell({ cell }: { cell: GridCellRef }) {
 }
 
 /**
- * One fielder. Tapping picks them up for a swap; tapping a second one
- * completes it. Also a drag source and drop target, for mice.
+ * One fielder. Tapping opens the picker for that cell. Also a drag source and
+ * drop target, for mice: dragging one fielder onto another still swaps them
+ * directly, which is quicker than the picker when both are already on the
+ * field, and never collides with it because a cell showing the picker is no
+ * longer showing this button.
  *
  * Selection, pinning and having-already-been-played are each carried by a
  * border treatment AND a word, never by colour alone.
@@ -173,9 +326,10 @@ function PinButton({
  * innings-as-columns table only appears from `md` up, inside its own
  * horizontal scroller so the page itself never slides sideways.
  *
- * Both views are the same cells with the same handlers: tap once to pick a
- * player, tap a second cell to swap them. Dragging works too, for mice, but
- * tap is the primary gesture because HTML5 drag-and-drop never fires on touch.
+ * Both views are the same cells with the same handlers: tap a cell to open the
+ * picker, choose anyone — bench included — to put them there. Dragging works
+ * too, for mice, but tap is the primary gesture because HTML5 drag-and-drop
+ * never fires on touch.
  */
 export function FieldingGridTable({
   grid,
@@ -186,11 +340,38 @@ export function FieldingGridTable({
   onSelect,
   onTogglePin,
   onSwap,
+  onAssign,
+  onCancel,
 }: FieldingGridTableProps) {
   const nameOf = new Map(present.map((p) => [p.id, p.name]))
   const femaleIds = new Set(present.filter((p) => p.isFemale).map((p) => p.id))
 
   const innings = Array.from({ length: grid.innings }, (_, i) => i + 1)
+
+  // One pass per inning, shared by the picker and the bench display so the two
+  // can never disagree about who is sitting.
+  const rosters = new Map<number, InningRoster>(
+    innings.map((inning) => {
+      const assignment = grid.assignments[inning - 1]
+      const positionOf = new Map<string, Position>()
+      for (const [position, id] of Object.entries(assignment) as [Position, string][]) {
+        positionOf.set(id, position)
+      }
+      const available = present.filter((player) => isAvailable(player, inning))
+      return [
+        inning,
+        {
+          fielding: available
+            .filter((player) => positionOf.has(player.id))
+            .map((player) => ({ player, position: positionOf.get(player.id)! }))
+            .sort((a, b) => POSITIONS.indexOf(a.position) - POSITIONS.indexOf(b.position)),
+          bench: available
+            .filter((player) => !positionOf.has(player.id))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        },
+      ]
+    }),
+  )
   // Positions actually in play at some point tonight. A short roster drops
   // positions, and a row for a position nobody plays all game is noise.
   const rows = POSITIONS.filter((position) =>
@@ -245,11 +426,28 @@ export function FieldingGridTable({
                     <span className="w-14 shrink-0 text-sm font-bold text-zinc-700 dark:text-zinc-300">
                       {position}
                     </span>
-                    <PlayerButton state={state} onSelect={onSelect} onSwap={onSwap} />
-                    <PinButton state={state} onTogglePin={onTogglePin} />
+                    {state.isSelected ? (
+                      <PlayerPicker
+                        cell={state.cell}
+                        current={grid.assignments[inning - 1][position]!}
+                        roster={rosters.get(inning)!}
+                        onAssign={onAssign}
+                        onCancel={onCancel}
+                      />
+                    ) : (
+                      <>
+                        <PlayerButton state={state} onSelect={onSelect} onSwap={onSwap} />
+                        <PinButton state={state} onTogglePin={onTogglePin} />
+                      </>
+                    )}
                   </div>
                 )
               })}
+
+            <div className="mt-1 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+              <h4 className="text-sm font-bold text-zinc-700 dark:text-zinc-300">Bench</h4>
+              <BenchList bench={rosters.get(inning)!.bench} />
+            </div>
           </section>
         ))}
       </div>
@@ -292,14 +490,47 @@ export function FieldingGridTable({
                   return (
                     <td key={inning} className="px-1 py-1 align-middle">
                       <div className="flex items-center gap-1">
-                        <PlayerButton state={state} onSelect={onSelect} onSwap={onSwap} />
-                        <PinButton state={state} onTogglePin={onTogglePin} />
+                        {state.isSelected ? (
+                          <PlayerPicker
+                            cell={state.cell}
+                            current={grid.assignments[inning - 1][position]!}
+                            roster={rosters.get(inning)!}
+                            onAssign={onAssign}
+                            onCancel={onCancel}
+                          />
+                        ) : (
+                          <>
+                            <PlayerButton state={state} onSelect={onSelect} onSwap={onSwap} />
+                            <PinButton state={state} onTogglePin={onTogglePin} />
+                          </>
+                        )}
                       </div>
                     </td>
                   )
                 })}
               </tr>
             ))}
+            {/* The bench belongs on the same axis as the innings it belongs
+                to, so it reads as a last row of the defence rather than as a
+                separate list the captain has to line up by eye. */}
+            <tr className="border-t-2 border-zinc-300 dark:border-zinc-700">
+              <th
+                scope="row"
+                className="px-2 py-2 text-left align-top font-bold text-zinc-700 dark:text-zinc-300"
+              >
+                Bench
+              </th>
+              {innings.map((inning) => (
+                <td key={inning} className="px-2 py-2 align-top">
+                  {/* The table sizes to its content, so the width has to live
+                      on a block inside the cell or a long bench would stretch
+                      the whole column. */}
+                  <div className="w-40">
+                    <BenchList bench={rosters.get(inning)!.bench} />
+                  </div>
+                </td>
+              ))}
+            </tr>
           </tbody>
         </table>
       </div>

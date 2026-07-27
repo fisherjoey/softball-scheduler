@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applySwap } from './applySwap'
+import { applySwap, assignToCell } from './applySwap'
 import { buildFieldingGrid } from './buildFieldingGrid'
 // Fixtures live in their own module — importing them from another *.test.ts
 // file would run that file's suite as a side effect.
@@ -140,5 +140,169 @@ describe('applySwap', () => {
     delete copy.assignments[0].P
     const result = applySwap(copy, present, { inning: 1, position: 'P' }, { inning: 1, position: 'C' })
     expect('error' in result).toBe(true)
+  })
+})
+
+describe('assignToCell', () => {
+  it('exchanges two players already fielding in that inning', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 11 })
+    const before = { p: grid.assignments[0].P!, c: grid.assignments[0].C! }
+    const result = assignToCell(grid, present, { inning: 1, position: 'P' }, before.c)
+    expect(result).not.toHaveProperty('error')
+    if (!('grid' in result)) return
+    expect(result.grid.assignments[0].P).toBe(before.c)
+    expect(result.grid.assignments[0].C).toBe(before.p)
+  })
+
+  it('brings a benched player in and sits the player they replace', () => {
+    const present = mkRoster(13, 5)
+    const byId = new Map(present.map((p) => [p.id, p]))
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 12 })
+    const onField = new Set(Object.values(grid.assignments[0]))
+    const benched = present.find((p) => !onField.has(p.id))!
+    expect(benched).toBeDefined()
+    // Replace somebody of the same gender, so the counting rules cannot be
+    // what decides this test — the bench-in itself is what is under test.
+    const slot = (Object.entries(grid.assignments[0]) as [Position, string][]).find(
+      ([, id]) => byId.get(id)!.isFemale === benched.isFemale,
+    )!
+    expect(slot).toBeDefined()
+    const displaced = slot[1]
+
+    const result = assignToCell(grid, present, { inning: 1, position: slot[0] }, benched.id)
+    expect(result).not.toHaveProperty('error')
+    if (!('grid' in result)) return
+    expect(result.grid.assignments[0][slot[0]]).toBe(benched.id)
+    // The player they replaced is on the bench, not hiding at another position.
+    expect(Object.values(result.grid.assignments[0])).not.toContain(displaced)
+    // Every other inning is untouched.
+    expect(JSON.stringify(result.grid.assignments.slice(1))).toBe(
+      JSON.stringify(grid.assignments.slice(1)),
+    )
+  })
+
+  it('is a no-op when the player already has that cell', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 13 })
+    const pitcher = grid.assignments[0].P!
+    const result = assignToCell(grid, present, { inning: 1, position: 'P' }, pitcher)
+    expect(result).not.toHaveProperty('error')
+    if (!('grid' in result)) return
+    expect(JSON.stringify(result.grid.assignments)).toBe(JSON.stringify(grid.assignments))
+  })
+
+  it('refuses a bench replacement that would break the female minimum', () => {
+    // 10 men, 3 women. Every inning fields 10 — necessarily all 3 women and 7
+    // men — so the bench is three men and swapping any of them in for a woman
+    // leaves the field a woman short.
+    const present = [
+      ...Array.from({ length: 10 }, (_, i) => mkPlayer(`m${i}`)),
+      ...Array.from({ length: 3 }, (_, i) => mkPlayer(`f${i}`, { isFemale: true })),
+    ]
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 14 })
+    const onField = new Set(Object.values(grid.assignments[0]))
+    const benchedMan = present.find((p) => !p.isFemale && !onField.has(p.id))!
+    const womanSlot = (Object.entries(grid.assignments[0]) as [Position, string][]).find(
+      ([, id]) => id.startsWith('f'),
+    )!
+
+    const result = assignToCell(
+      grid,
+      present,
+      { inning: 1, position: womanSlot[0] },
+      benchedMan.id,
+    )
+    expect('error' in result).toBe(true)
+    if (!('error' in result)) return
+    expect(result.error).toBe(
+      'That would leave only 2 women on the field, and 3 are required (inning 1)',
+    )
+  })
+
+  it('refuses a bench replacement that would put an eighth M/X player on the field', () => {
+    // 2 women, 9 men. The M/X cap holds the defence to 9, which is 2 women and
+    // 7 men, so the cap is saturated and a benched man taking a woman's spot
+    // would make it 8.
+    //
+    // The reported reason is the female minimum, and that is not a bug: with
+    // these rule numbers a bench-in can never break the cap ALONE. Saturating
+    // the cap means the field holds exactly `size - 7` women, and `size` is
+    // itself `min(10, present, women + 7)`, which makes `size - 7` exactly the
+    // required number of women. So the woman leaving always takes the minimum
+    // with her, and `checkInning` reports the counting rule the captain can act
+    // on first.
+    const present = [
+      ...Array.from({ length: 9 }, (_, i) => mkPlayer(`m${i}`)),
+      ...Array.from({ length: 2 }, (_, i) => mkPlayer(`f${i}`, { isFemale: true })),
+    ]
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 15 })
+    const inning1 = grid.assignments[0]
+    expect(Object.values(inning1)).toHaveLength(9)
+    expect(Object.values(inning1).filter((id) => !id.startsWith('f'))).toHaveLength(7)
+
+    const onField = new Set(Object.values(inning1))
+    const benchedMan = present.find((p) => !p.isFemale && !onField.has(p.id))!
+    const womanSlot = (Object.entries(inning1) as [Position, string][]).find(([, id]) =>
+      id.startsWith('f'),
+    )!
+
+    const result = assignToCell(
+      grid,
+      present,
+      { inning: 1, position: womanSlot[0] },
+      benchedMan.id,
+    )
+    expect('error' in result).toBe(true)
+    if (!('error' in result)) return
+    expect(result.error).toMatch(/women|M\/X/i)
+    expect(result.error).toMatch(/inning 1/)
+  })
+
+  it('refuses a player who is not available that inning', () => {
+    const present = mkRoster(13, 5)
+    // p12 is male and turns up in the fifth, so he cannot be fielding in the
+    // first and is never a legal choice there.
+    present[12] = { ...present[12], arrivedInning: 5 }
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 16 })
+    const result = assignToCell(grid, present, { inning: 1, position: 'P' }, 'p12')
+    expect('error' in result).toBe(true)
+    if ('error' in result) expect(result.error).toMatch(/not available in inning 1/)
+  })
+
+  it('refuses a player who is not on tonight’s roster', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 17 })
+    const result = assignToCell(grid, present, { inning: 1, position: 'P' }, 'ghost')
+    expect('error' in result).toBe(true)
+    if ('error' in result) expect(result.error).toMatch(/not marked present/)
+  })
+
+  it('reports a position nobody is playing rather than growing the defence', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 18 })
+    const copy = { ...grid, assignments: grid.assignments.map((a) => ({ ...a })) }
+    delete copy.assignments[0].P
+    const onField = new Set(Object.values(copy.assignments[0]))
+    const benched = present.find((p) => !onField.has(p.id))!
+    const result = assignToCell(copy, present, { inning: 1, position: 'P' }, benched.id)
+    expect('error' in result).toBe(true)
+    if ('error' in result) expect(result.error).toMatch(/Nobody is playing P in inning 1/)
+  })
+
+  it('does not mutate the original grid, on success or on refusal', () => {
+    const present = mkRoster(13, 5)
+    const byId = new Map(present.map((p) => [p.id, p]))
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 19 })
+    const snapshot = JSON.stringify(grid.assignments)
+    const onField = new Set(Object.values(grid.assignments[0]))
+    const benched = present.find((p) => !onField.has(p.id))!
+    const slot = (Object.entries(grid.assignments[0]) as [Position, string][]).find(
+      ([, id]) => byId.get(id)!.isFemale === benched.isFemale,
+    )!
+
+    assignToCell(grid, present, { inning: 1, position: slot[0] }, benched.id)
+    assignToCell(grid, present, { inning: 1, position: slot[0] }, 'ghost')
+    expect(JSON.stringify(grid.assignments)).toBe(snapshot)
   })
 })

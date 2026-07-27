@@ -77,6 +77,92 @@ export function applySwap(
 }
 
 /**
+ * Put a specific player in a specific cell, or explain why that is illegal.
+ *
+ * `applySwap` can only trade two people who are both already on the field,
+ * which leaves the bench unreachable: the captain who wants the sub who just
+ * showed up to take an inning at short has no gesture for it. This is that
+ * gesture — name the cell, name the player, and whatever has to move gets
+ * moved.
+ *
+ * Three shapes, decided by where the player already is that inning:
+ *   - fielding somewhere else, so the two exchange positions and the field
+ *     keeps exactly the people it had;
+ *   - on the bench, so they take the cell and its occupant sits down;
+ *   - already in this cell, which is not an error, just nothing to do.
+ *
+ * The bench case is the one that can turn a legal inning illegal, and it is
+ * worth being explicit about why: a same-inning exchange cannot move the
+ * gender counts, because the same ten people are on the field afterwards. A
+ * bench-in replaces one person with another, so a benched man taking a woman's
+ * spot drops the women on the field by one and raises the M/X count by one.
+ * Both are hard rules, both are re-checked, and the refusal says which.
+ *
+ * Only the one affected inning is re-checked, for the same reason `applySwap`
+ * checks only two: every other inning is untouched, and re-validating them
+ * could only surface a problem this gesture cannot fix. Never mutates.
+ */
+export function assignToCell(
+  grid: FieldingGrid,
+  present: PresentPlayer[],
+  cell: GridCell,
+  playerId: string,
+): SwapResult {
+  const byId = new Map(present.map((p) => [p.id, p]))
+  const nameOf = (id: string) => byId.get(id)?.name ?? id
+
+  if (cell.inning < 1 || cell.inning > grid.assignments.length) {
+    return { error: `Inning ${cell.inning} is not part of this game.` }
+  }
+  const occupant = grid.assignments[cell.inning - 1][cell.position]
+  if (occupant === undefined) {
+    // Refusing rather than filling it: a position with nobody in it is a
+    // position not in play that inning, and adding an eleventh fielder to a
+    // ten-slot defence is not a swap.
+    return { error: `Nobody is playing ${cell.position} in inning ${cell.inning}.` }
+  }
+
+  const player = byId.get(playerId)
+  if (!player) return { error: `${nameOf(playerId)} is not marked present for this game.` }
+
+  // Checked before availability on purpose. Re-picking the name already in the
+  // cell is the captain closing the picker, and closing a picker must not
+  // produce an error even for somebody the grid should not have seated.
+  if (occupant === playerId) return { grid }
+
+  // `checkInning` catches this too, but its message would arrive with a
+  // redundant "(inning 4)" bolted onto a sentence that already says inning 4.
+  if (!isAvailable(player, cell.inning)) {
+    return { error: `${player.name} is not available in inning ${cell.inning}.` }
+  }
+
+  // Deep copy first, move on the copy: a rejection has to leave the caller's
+  // grid exactly as it found it.
+  const assignments: InningAssignment[] = grid.assignments.map((inning) => ({ ...inning }))
+  const target = assignments[cell.inning - 1]
+
+  const elsewhere = (Object.entries(target) as [Position, string][]).find(
+    ([position, id]) => id === playerId && position !== cell.position,
+  )
+  // Vacating their old position with the displaced player is what makes this
+  // an exchange rather than a clone; leaving it would put the incoming player
+  // on the field twice.
+  if (elsewhere) target[elsewhere[0]] = occupant
+  target[cell.position] = playerId
+
+  const problem = checkInning(target, present, cell.inning, byId, nameOf)
+  if (problem) return { error: `${problem} (inning ${cell.inning})` }
+
+  return {
+    grid: {
+      ...grid,
+      assignments,
+      score: scoreGrid(assignments, present, countRelaxed(assignments, byId)),
+    },
+  }
+}
+
+/**
  * Every hard rule one inning has to satisfy. Returns null when it is legal.
  *
  * Order matters, because a single cross-inning drag routinely breaks more than

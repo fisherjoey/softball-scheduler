@@ -7,11 +7,18 @@ import { FieldingGridTable, type GridCellRef } from '@/components/FieldingGridTa
 import { PlayerSummary } from '@/components/PlayerSummary'
 import { RosterStatusBanner } from '@/components/RosterStatusBanner'
 import { persistLineup } from './actions'
-import { applySwap } from '@/lib/solver/applySwap'
+import { applySwap, assignToCell } from '@/lib/solver/applySwap'
 import { buildBattingOrder } from '@/lib/solver/buildBattingOrder'
 import { buildFieldingGrid } from '@/lib/solver/buildFieldingGrid'
 import { validateRoster } from '@/lib/solver/validateRoster'
-import type { BattingOrder, FieldingGrid, Pin, PresentPlayer, SlotHistory } from '@/lib/types'
+import type {
+  BattingOrder,
+  FieldingGrid,
+  Pin,
+  Position,
+  PresentPlayer,
+  SlotHistory,
+} from '@/lib/types'
 
 export interface LineupClientProps {
   gameId: string
@@ -191,17 +198,69 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
     setDirty(true)
   }
 
-  function selectCell(cell: GridCellRef) {
-    setSwapError(null)
-    if (selected === null) {
-      setSelected(cell)
+  /**
+   * Put a named player in a cell, whoever has to move for it.
+   *
+   * A choice from the picker is one of three things, and only the third needs
+   * `assignToCell`: re-choosing the player already there is the captain
+   * closing the picker, and choosing somebody already fielding that inning is
+   * a plain two-cell swap, which `swap` already handles — pins and all — and
+   * which must keep handling, or a pin would stop following its player the
+   * moment the captain used the picker instead of a drag.
+   */
+  function assign(cell: GridCellRef, playerId: string) {
+    if (!lineup) return
+    const assignment = lineup.grid.assignments[cell.inning - 1]
+    const displaced = assignment[cell.position]
+
+    if (playerId === displaced) {
+      setSelected(null)
+      setSwapError(null)
       return
     }
-    if (selected.inning === cell.inning && selected.position === cell.position) {
+
+    const from = (Object.entries(assignment) as [Position, string][]).find(
+      ([position, id]) => id === playerId && position !== cell.position,
+    )
+    if (from) {
+      swap({ inning: cell.inning, position: from[0] }, cell)
+      return
+    }
+
+    const result = assignToCell(lineup.grid, present, cell, playerId)
+    setSelected(null)
+    if ('error' in result) {
+      // Refused, not half-applied: the grid the captain is looking at is
+      // exactly the grid he had before he opened the picker.
+      setSwapError(result.error)
+      return
+    }
+    setSwapError(null)
+    // The player who lost the spot is on the bench now, and a pin cannot point
+    // at the bench. Dropping theirs beats leaving Reshuffle to honour a pin
+    // the captain has just overruled.
+    setPins((current) =>
+      current.filter(
+        (pin) =>
+          !(
+            pin.inning === cell.inning &&
+            pin.position === cell.position &&
+            pin.playerId === displaced
+          ),
+      ),
+    )
+    setLineup({ ...lineup, grid: result.grid })
+    setDirty(true)
+  }
+
+  /** Tap a cell to open its picker; tap it again to close it. */
+  function selectCell(cell: GridCellRef) {
+    setSwapError(null)
+    if (selected !== null && selected.inning === cell.inning && selected.position === cell.position) {
       setSelected(null)
       return
     }
-    swap(selected, cell)
+    setSelected(cell)
   }
 
   function save() {
@@ -216,11 +275,6 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
       }
     })
   }
-
-  const selectedName = selected
-    ? present.find((p) => p.id === lineup?.grid.assignments[selected.inning - 1][selected.position])
-        ?.name
-    : null
 
   return (
     <div className="flex flex-col gap-6">
@@ -275,28 +329,9 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
               Fielding
             </h2>
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Tap a player, then tap another to swap them. Tap ○ to pin somebody in place so
-              Reshuffle leaves them alone.
+              Tap a player to pick who plays that spot — anyone on the field, or anyone on the
+              bench. Tap ○ to pin somebody in place so Reshuffle leaves them alone.
             </p>
-
-            {selected && (
-              <div
-                role="status"
-                className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-zinc-900 p-3 text-sm font-medium text-foreground dark:border-zinc-100"
-              >
-                <span className="flex-1">
-                  Swapping {selectedName ?? 'player'} ({selected.position}, inning{' '}
-                  {selected.inning}) — tap who they swap with.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelected(null)}
-                  className="flex h-11 items-center justify-center rounded-md border-2 border-zinc-900 px-4 text-sm font-semibold dark:border-zinc-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
 
             {swapError && (
               <p
@@ -316,6 +351,8 @@ export function LineupClient({ gameId, innings, present, history, saved }: Lineu
               onSelect={selectCell}
               onTogglePin={togglePin}
               onSwap={swap}
+              onAssign={assign}
+              onCancel={() => setSelected(null)}
             />
           </section>
 
