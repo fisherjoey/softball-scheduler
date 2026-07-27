@@ -33,6 +33,15 @@ export function validateRoster(present: PresentPlayer[]): RosterStatus {
 
   const dropCount = RULES.fullFieldSize - maxFielders
   const dropped = RULES.positionDropOrder.slice(0, dropCount)
+
+  // A silently short drop list would leave activePositions larger than
+  // maxFielders, which no solver can satisfy. Fail loudly instead.
+  if (dropped.length < dropCount) {
+    throw new Error(
+      `positionDropOrder has ${RULES.positionDropOrder.length} entries but ${dropCount} positions must be dropped. Extend RULES.positionDropOrder.`,
+    )
+  }
+
   const activePositions: Position[] = POSITIONS.filter((p) => !dropped.includes(p))
 
   if (maxFielders < RULES.fullFieldSize && blockers.length === 0) {
@@ -49,7 +58,8 @@ export function validateRoster(present: PresentPlayer[]): RosterStatus {
     warnings.push(
       `Only ${rosterPlayers.length} roster players — subs will have to field to reach ${maxFielders}.`,
     )
-  } else if (rosterFemales < requiredFemalesOnField) {
+  }
+  if (rosterFemales < requiredFemalesOnField) {
     warnings.push(
       `Only ${rosterFemales} female roster player${rosterFemales === 1 ? '' : 's'} — a female sub has to field to meet the ${requiredFemalesOnField}-women minimum.`,
     )

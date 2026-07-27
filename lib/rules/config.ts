@@ -22,8 +22,13 @@ export const RULES = {
   maxRunsAtMaxLength: 1,
   /** Every Nth female slot becomes an automatic out when short on women. */
   autoOutEveryNthFemaleSpot: 3,
-  /** Positions surrendered first when fielding fewer than 10. */
-  positionDropOrder: ['ROVER', 'RF'] as Position[],
+  /**
+   * Positions surrendered first when fielding fewer than 10, most expendable
+   * first. Covers every reachable dropCount: a legal game can go as low as
+   * 7 fielders, and a defaulted one lower still, so this must span all ten
+   * rather than only the common two.
+   */
+  positionDropOrder: ['ROVER', 'RF', 'LF', 'CF', '2B', '3B', '1B', 'SS', 'C', 'P'] as Position[],
 } as const
 
 /** Fairness objective weights. Higher means the solver cares more. */

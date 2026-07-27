@@ -100,4 +100,39 @@ describe('validateRoster', () => {
     expect(s.requiredFemalesOnField).toBe(3)
     expect(s.warnings.join(' ')).toMatch(/sub/i)
   })
+
+  it('always yields exactly as many active positions as it can field', () => {
+    for (let n = 7; n <= 15; n++) {
+      for (let f = 2; f <= Math.min(n, 6); f++) {
+        const s = validateRoster(mkRoster(n, f))
+        expect(s.activePositions.length, `n=${n} f=${f}`).toBe(s.maxFielders)
+      }
+    }
+  })
+
+  it('drops three positions at the 7-player league minimum', () => {
+    const s = validateRoster(mkRoster(7, 2))
+    expect(s.maxFielders).toBe(7)
+    expect(s.activePositions).toHaveLength(7)
+    expect(s.activePositions).not.toContain('ROVER')
+    expect(s.activePositions).not.toContain('RF')
+    expect(s.activePositions).not.toContain('LF')
+    expect(s.activePositions).toContain('P')
+    expect(s.activePositions).toContain('C')
+  })
+
+  it('surfaces both shortfall warnings when both conditions hold', () => {
+    // 8 present, only 3 of them roster players, and only 1 roster female.
+    const roster = [
+      mkPlayer('r0', { isFemale: true }),
+      mkPlayer('r1'),
+      mkPlayer('r2'),
+    ]
+    const subs = Array.from({ length: 5 }, (_, i) =>
+      mkPlayer(`s${i}`, { isSub: true, isFemale: i < 2 }),
+    )
+    const s = validateRoster([...roster, ...subs])
+    expect(s.warnings.filter((w) => /roster players/.test(w))).toHaveLength(1)
+    expect(s.warnings.filter((w) => /female roster player/.test(w))).toHaveLength(1)
+  })
 })
