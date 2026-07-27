@@ -81,19 +81,29 @@ I/O, which is why it can run in the browser and be property-tested.
    | `APP_PASSWORD` | The shared password for the single-user login gate. |
    | `SESSION_SECRET` | Random 32+ character string, used to sign the session cookie. |
 
-   In this workspace the real `DATABASE_URL` is not written to a file at all — it lives in
-   Bitwarden and is injected per command:
+   In this workspace none of the three is written to a file. All three live in Bitwarden and are
+   injected per command by `scripts/with-secrets.sh`:
 
-   ```bash
-   ~/.local/bin/bw-agent exec softball-database-url --env DATABASE_URL -- npm run dev
-   ```
+   | Bitwarden item | Injected as |
+   |---|---|
+   | `softball-database-url` | `DATABASE_URL` |
+   | `softball-app-password` | `APP_PASSWORD` |
+   | `softball-session-secret` | `SESSION_SECRET` |
 
 3. **Run it.**
 
    ```bash
    npm install
-   npm run dev      # http://localhost:3000
+   ./scripts/with-secrets.sh npm run dev      # http://localhost:3000
    ```
+
+   To read the login password:
+
+   ```bash
+   bw-agent get softball-app-password --reveal
+   ```
+
+   If either command reports the vault is locked, run `bw-agent unlock` first.
 
 ## Commands
 
@@ -103,8 +113,18 @@ I/O, which is why it can run in the browser and be property-tested.
 | `npm run build` | Production build. Needs `DATABASE_URL` set — the route modules import the database client at module scope. |
 | `npm start` | Serve the production build. |
 | `npm test` | The unit and component suite. No network, no database. |
-| `npm run test:db` | The live-database integration test. Deliberately excluded from `npm test`; run it with `bw-agent exec` as above. |
+| `npm run test:db` | The live-database integration test. Deliberately excluded from `npm test`; run it through `scripts/with-secrets.sh`. |
 | `npm run lint` | ESLint. |
+
+Anything needing credentials goes through the wrapper, which injects all three from Bitwarden and
+writes nothing to disk:
+
+```bash
+./scripts/with-secrets.sh npm run dev
+./scripts/with-secrets.sh npm run build
+./scripts/with-secrets.sh npm run test:db
+./scripts/with-secrets.sh npx drizzle-kit push
+```
 
 ## Deploying
 
