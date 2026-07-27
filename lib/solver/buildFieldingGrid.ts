@@ -5,6 +5,7 @@ import type {
   Pin,
   Position,
   PresentPlayer,
+  RosterStatus,
 } from '@/lib/types'
 import { RULES, SOLVER, WEIGHTS } from '@/lib/rules/config'
 import { validateRoster } from './validateRoster'
@@ -17,12 +18,45 @@ export function isAvailable(player: PresentPlayer, inning: number): boolean {
   return true
 }
 
+/**
+ * Roster status restricted to the players actually available in one inning.
+ *
+ * The whole-game status answers "how many can we field tonight?", which is the
+ * wrong question the moment somebody leaves early: a roster of 12 validates
+ * clean at 10 fielders, but if five of them go home after the third inning
+ * there is no legal way to put 10 on the field in the fourth. Recomputing per
+ * inning off the same `validateRoster` logic drops the field size for exactly
+ * the innings that need it, and leaves every other inning untouched.
+ */
+export function inningStatus(present: PresentPlayer[], inning: number): RosterStatus {
+  return validateRoster(present.filter((p) => isAvailable(p, inning)))
+}
+
 interface Attempt {
   assignments: InningAssignment[]
-  /** Positions nobody present was listed at. These drive the captain warning. */
+  /** Positions nobody available was listed at. These drive the captain warning. */
   uncoverable: Set<Position>
+  /** Positions only a sub can cover, so a sub has to field. */
+  subOnly: Set<Position>
   /** How many individual assignments ignored a player's eligibility list. */
   relaxedCount: number
+}
+
+/**
+ * Spread the restart seeds for one input seed across the whole 32-bit range.
+ *
+ * The obvious `seed + r` makes consecutive input seeds explore almost the same
+ * restarts — with 300 restarts, seed 9 and seed 10 share 299 of them and
+ * almost always return the identical grid. That makes a Reshuffle button that
+ * increments the seed look broken. Hashing the pair gives each input seed a
+ * disjoint-looking set of restarts.
+ */
+function mixSeed(seed: number, restart: number): number {
+  let h = (Math.imul(seed >>> 0, 0x9e3779b1) ^ Math.imul(restart + 1, 0x85ebca6b)) >>> 0
+  h ^= h >>> 15
+  h = Math.imul(h, 0x2c1b3c6d) >>> 0
+  h ^= h >>> 12
+  return h >>> 0
 }
 
 /**
@@ -34,50 +68,50 @@ interface Attempt {
  * size, and being able to explain the result.
  */
 export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
-  const { present, innings, seed } = input
+  const { present, innings, pins, seed } = input
   const restarts = input.restarts ?? SOLVER.restarts
-  const status = validateRoster(present)
-  const positions = status.activePositions
+  const full = validateRoster(present)
+
+  const perInning = Array.from({ length: innings }, (_, i) => inningStatus(present, i + 1))
 
   const lockedThrough = input.lockedThroughInning ?? 0
   const locked = input.existingGrid?.assignments.slice(0, lockedThrough) ?? []
 
   let best: Attempt | null = null
   let bestScore = -Infinity
-  let bestSeed = seed
 
   for (let r = 0; r < restarts; r++) {
-    const attemptSeed = seed + r
-    const attempt = construct(
-      input,
-      positions,
-      status.requiredFemalesOnField,
-      locked,
-      makeRng(attemptSeed),
-    )
+    const attempt = construct(input, perInning, locked, makeRng(mixSeed(seed, r)))
     if (!attempt) continue
     const score = scoreGrid(attempt.assignments, present, attempt.relaxedCount)
     if (score > bestScore) {
       bestScore = score
       best = attempt
-      bestSeed = attemptSeed
     }
   }
 
   if (!best) {
-    // Construction only fails when the counting problem itself is unsolvable:
-    // too few bodies available in some inning to fill the active positions
-    // while honouring the M/X cap and the female minimum. No amount of
-    // relaxing eligibility can conjure a player out of thin air, so stop.
+    // Construction only fails when the counting problem itself is unsolvable
+    // for some inning even after the field size has been dropped to fit. No
+    // amount of relaxing eligibility can conjure a player out of thin air.
     throw new Error(
       'No legal fielding grid exists for this roster. Check the roster status banners.',
     )
   }
 
-  const warnings = [...status.warnings]
+  const warnings = [
+    ...full.warnings,
+    ...fieldSizeWarnings(perInning, full),
+    ...pinWarnings(present, perInning, pins, innings, locked.length),
+  ]
   if (best.uncoverable.size > 0) {
     warnings.push(
       `Nobody present is listed at ${[...best.uncoverable].join(', ')}. Filled anyway — set someone's eligibility to fix this.`,
+    )
+  }
+  if (best.subOnly.size > 0) {
+    warnings.push(
+      `Only a sub is listed at ${[...best.subOnly].join(', ')}, so a sub has to field. Add a roster player there to fix this.`,
     )
   }
 
@@ -86,14 +120,128 @@ export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
     assignments: best.assignments,
     warnings,
     score: bestScore,
-    seed: bestSeed,
+    // The input seed, not the winning restart's derived seed: this is the
+    // value a caller passes back in to reproduce this exact grid.
+    seed,
   }
+}
+
+/** Tell the captain which innings field short, and why, in consecutive runs. */
+function fieldSizeWarnings(perInning: RosterStatus[], full: RosterStatus): string[] {
+  const out: string[] = []
+  const fullSize = full.activePositions.length
+  let i = 0
+  while (i < perInning.length) {
+    const size = perInning[i].activePositions.length
+    if (size === fullSize) {
+      i++
+      continue
+    }
+    let j = i
+    while (j + 1 < perInning.length && perInning[j + 1].activePositions.length === size) j++
+    const label = i === j ? `Inning ${i + 1} fields` : `Innings ${i + 1}-${j + 1} field`
+    out.push(
+      `${label} ${size}, not ${fullSize} — only ${perInning[i].playerCount} of the ${full.playerCount} present are available then.`,
+    )
+    i = j + 1
+  }
+  return out
+}
+
+/**
+ * Explain every pin that could not be honoured.
+ *
+ * Dropping an impossible pin is right; dropping it silently is not. The
+ * captain typed a name into a slot, and if somebody else ends up standing
+ * there they need to know which pin was dropped and what beat it.
+ */
+function pinWarnings(
+  present: PresentPlayer[],
+  perInning: RosterStatus[],
+  pins: Pin[],
+  innings: number,
+  lockedCount: number,
+): string[] {
+  const byId = new Map(present.map((p) => [p.id, p]))
+  const out: string[] = []
+  const nameOf = (id: string) => byId.get(id)?.name ?? id
+
+  for (let inning = 1; inning <= innings; inning++) {
+    const status = perInning[inning - 1]
+    const seated = new Map<Position, string>()
+    const taken = new Set<string>()
+    let chosenF = 0
+    let chosenM = 0
+    const available = present.filter((p) => isAvailable(p, inning))
+    let freeF = available.filter((p) => p.isFemale).length
+    let freeM = available.length - freeF
+    const size = status.activePositions.length
+
+    const reject = (pin: Pin, why: string) =>
+      out.push(
+        `Could not honour the pin of ${nameOf(pin.playerId)} at ${pin.position} in inning ${inning}: ${why}.`,
+      )
+
+    for (const pin of pins) {
+      if (pin.inning !== inning) continue
+
+      if (inning <= lockedCount) {
+        reject(pin, 'that inning is locked and was copied from the existing grid')
+        continue
+      }
+      if (!status.activePositions.includes(pin.position)) {
+        reject(pin, `${pin.position} is not in play that inning`)
+        continue
+      }
+      const already = seated.get(pin.position)
+      if (already !== undefined) {
+        reject(pin, `${pin.position} is already pinned to ${nameOf(already)}`)
+        continue
+      }
+      const player = byId.get(pin.playerId)
+      if (!player) {
+        reject(pin, 'that player is not on tonight’s roster')
+        continue
+      }
+      if (!isAvailable(player, inning)) {
+        reject(pin, 'they are not available that inning')
+        continue
+      }
+      if (taken.has(player.id)) {
+        reject(pin, 'they are already pinned to another position that inning')
+        continue
+      }
+      const problem = countsProblem(
+        chosenF + (player.isFemale ? 1 : 0),
+        chosenM + (player.isFemale ? 0 : 1),
+        taken.size + 1,
+        freeF - (player.isFemale ? 1 : 0),
+        freeM - (player.isFemale ? 0 : 1),
+        size,
+        status.requiredFemalesOnField,
+      )
+      if (problem) {
+        reject(pin, describeProblem(problem, status.requiredFemalesOnField))
+        continue
+      }
+
+      seated.set(pin.position, player.id)
+      taken.add(player.id)
+      if (player.isFemale) {
+        chosenF++
+        freeF--
+      } else {
+        chosenM++
+        freeM--
+      }
+    }
+  }
+  return out
 }
 
 function construct(
   input: FieldingInput,
-  positions: Position[],
-  requiredFemales: number,
+  perInning: RosterStatus[],
   locked: InningAssignment[],
   rng: Rng,
 ): Attempt | null {
@@ -101,6 +249,7 @@ function construct(
   const byId = new Map(present.map((p) => [p.id, p]))
   const assignments: InningAssignment[] = []
   const uncoverable = new Set<Position>()
+  const subOnly = new Set<Position>()
   let relaxedCount = 0
   const inningsPlayed = new Map<string, number>(present.map((p) => [p.id, 0]))
   const positionCounts = new Map<string, number>()
@@ -121,12 +270,13 @@ function construct(
       continue
     }
 
+    const status = perInning[inning - 1]
     let solved: SolvedInning | null = null
     for (let retry = 0; retry < SOLVER.inningRetries && !solved; retry++) {
       solved = solveInning({
         inning,
-        positions,
-        requiredFemales,
+        positions: status.activePositions,
+        requiredFemales: status.requiredFemalesOnField,
         present,
         byId,
         pins,
@@ -140,12 +290,13 @@ function construct(
     assignments.push(solved.assignment)
     relaxedCount += solved.relaxedCount
     for (const position of solved.uncoverable) uncoverable.add(position)
+    for (const position of solved.subOnly) subOnly.add(position)
     for (const [position, id] of Object.entries(solved.assignment) as [Position, string][]) {
       bump(id, position)
     }
   }
 
-  return { assignments, uncoverable, relaxedCount }
+  return { assignments, uncoverable, subOnly, relaxedCount }
 }
 
 interface InningContext {
@@ -164,17 +315,20 @@ interface SolvedInning {
   assignment: InningAssignment
   relaxedCount: number
   uncoverable: Position[]
+  subOnly: Position[]
 }
 
+type Infeasibility = 'malesCap' | 'femaleMinimum' | 'tooFewPlayers' | null
+
 /**
- * Can the inning still be completed legally from here?
+ * Can the inning still be completed legally from here, and if not, why?
  *
  * This is the whole legality question reduced to counting, and it is the
  * guard the greedy leans on. `slotsLeft` slots remain; we hold `chosenF`
  * women and `chosenM` M/X players; `freeF`/`freeM` are still on the bench.
- * Every one of these five ways to fail is reachable with a real roster.
+ * Every one of these ways to fail is reachable with a real roster.
  */
-function countsFeasible(
+function countsProblem(
   chosenF: number,
   chosenM: number,
   chosenCount: number,
@@ -182,21 +336,77 @@ function countsFeasible(
   freeM: number,
   size: number,
   requiredFemales: number,
-): boolean {
+): Infeasibility {
   const slotsLeft = size - chosenCount
-  if (slotsLeft < 0) return false
-  if (chosenM > RULES.maxMalesOnField) return false
+  if (slotsLeft < 0) return 'tooFewPlayers'
+  if (chosenM > RULES.maxMalesOnField) return 'malesCap'
 
   // Women still owed, and whether the remaining slots and bench can pay it.
   const femalesNeeded = Math.max(0, requiredFemales - chosenF)
-  if (femalesNeeded > slotsLeft) return false
-  if (femalesNeeded > freeF) return false
+  if (femalesNeeded > slotsLeft) return 'femaleMinimum'
+  if (femalesNeeded > freeF) return 'femaleMinimum'
 
   // Enough bodies to finish at all, once the M/X cap is applied to the bench.
   const malesAllowed = RULES.maxMalesOnField - chosenM
-  if (freeF + Math.min(freeM, malesAllowed) < slotsLeft) return false
+  if (freeF + Math.min(freeM, malesAllowed) < slotsLeft) return 'tooFewPlayers'
 
-  return true
+  return null
+}
+
+function describeProblem(problem: Infeasibility, requiredFemales: number): string {
+  if (problem === 'malesCap') return `it would break the ${RULES.maxMalesOnField} M/X cap`
+  if (problem === 'femaleMinimum') {
+    return `the inning could then not field ${requiredFemales} women`
+  }
+  return 'too few players are available that inning'
+}
+
+/**
+ * Maximum bipartite matching by Kuhn's augmenting path.
+ *
+ * Greedy alone can strand a position whose only eligible players were already
+ * claimed; augmenting lets those earlier positions shuffle sideways so
+ * everyone still fits. Feeding it preference-ordered adjacency means it takes
+ * the preferred player whenever the choice is free, while still guaranteeing
+ * maximum coverage.
+ */
+function maximumMatching(
+  ordered: Position[],
+  adjacency: Map<Position, string[]>,
+): { matched: Map<Position, string>; unmatched: Position[] } {
+  const byPlayer = new Map<string, Position>()
+  const matched = new Map<Position, string>()
+
+  const assign = (position: Position, visited: Set<string>): boolean => {
+    for (const id of adjacency.get(position) ?? []) {
+      if (visited.has(id)) continue
+      visited.add(id)
+      const holder = byPlayer.get(id)
+      if (holder === undefined || assign(holder, visited)) {
+        byPlayer.set(id, position)
+        matched.set(position, id)
+        return true
+      }
+    }
+    return false
+  }
+
+  const unmatched: Position[] = []
+  for (const position of ordered) {
+    if (!assign(position, new Set())) unmatched.push(position)
+  }
+  return { matched, unmatched }
+}
+
+/** Hardest position first, ties broken randomly. */
+function byScarcity(
+  positions: Position[],
+  adjacency: Map<Position, string[]>,
+  rng: Rng,
+): Position[] {
+  return rng
+    .shuffle(positions)
+    .sort((a, b) => (adjacency.get(a)?.length ?? 0) - (adjacency.get(b)?.length ?? 0))
 }
 
 function solveInning(ctx: InningContext): SolvedInning | null {
@@ -214,6 +424,8 @@ function solveInning(ctx: InningContext): SolvedInning | null {
 
   const size = positions.length
   const available = present.filter((p) => isAvailable(p, inning))
+  const eligible = (position: Position, player: PresentPlayer) =>
+    player.positions[position] !== undefined
 
   const assignment: InningAssignment = {}
   const chosen: PresentPlayer[] = []
@@ -225,7 +437,7 @@ function solveInning(ctx: InningContext): SolvedInning | null {
   let freeF = available.filter((p) => p.isFemale).length
   let freeM = available.length - freeF
 
-  if (!countsFeasible(0, 0, 0, freeF, freeM, size, requiredFemales)) return null
+  if (countsProblem(0, 0, 0, freeF, freeM, size, requiredFemales)) return null
 
   const take = (player: PresentPlayer) => {
     chosen.push(player)
@@ -241,7 +453,7 @@ function solveInning(ctx: InningContext): SolvedInning | null {
 
   /** Would taking this player leave the rest of the inning completable? */
   const keepsFeasible = (player: PresentPlayer): boolean =>
-    countsFeasible(
+    countsProblem(
       chosenF + (player.isFemale ? 1 : 0),
       chosenM + (player.isFemale ? 0 : 1),
       chosen.length + 1,
@@ -249,9 +461,11 @@ function solveInning(ctx: InningContext): SolvedInning | null {
       freeM - (player.isFemale ? 0 : 1),
       size,
       requiredFemales,
-    )
+    ) === null
 
-  // --- Pins. Honoured unless honouring one would make the inning illegal. ---
+  // --- Pins. Honoured unless honouring one would make the inning illegal.
+  // Every rejection here is explained to the captain by `pinWarnings`, which
+  // walks the same sequence of checks over the same state.
   for (const pin of pins) {
     if (pin.inning !== inning) continue
     if (!positions.includes(pin.position)) continue
@@ -265,10 +479,43 @@ function solveInning(ctx: InningContext): SolvedInning | null {
     take(player)
   }
 
-  // --- Phase A: who fields this inning. ---
-  // Preference is fixed for the whole inning, so rank once and then walk the
-  // ranking taking the first player who keeps the inning completable. The
-  // feasibility guard is what makes this safe: the greedy can never paint
+  const openPositions = positions.filter((p) => assignment[p] === undefined)
+
+  // --- Phase A1: cover the specialists first. ---
+  // Choosing fielders on fairness alone quietly benches the one person who can
+  // catch, because "who deserves an inning" says nothing about "who can cover
+  // C". So before fairness gets a say, match every open position against the
+  // whole available bench and reserve the players that maximum coverage needs.
+  // Adjacency is in fairness order, so where a position has several eligible
+  // players the matching still takes the one most deserving of an inning; the
+  // ordering only binds where a position has exactly one candidate.
+  const coverAdjacency = new Map<Position, string[]>()
+  for (const position of openPositions) {
+    coverAdjacency.set(
+      position,
+      available
+        .filter((p) => !taken.has(p.id) && eligible(position, p))
+        .map((p) => ({ id: p.id, rank: fieldingRank(p, inningsPlayed, rng) }))
+        .sort((a, b) => b.rank - a.rank)
+        .map((c) => c.id),
+    )
+  }
+  const coverOrder = byScarcity(openPositions, coverAdjacency, rng)
+  const cover = maximumMatching(coverOrder, coverAdjacency)
+
+  // Scarcest position first, so when the gender guard starts refusing players
+  // it refuses them for positions that still have plenty of other candidates.
+  for (const position of coverOrder) {
+    if (chosen.length >= size) break
+    const id = cover.matched.get(position)
+    if (id === undefined) continue
+    const player = byId.get(id)
+    if (!player || taken.has(id) || !keepsFeasible(player)) continue
+    take(player)
+  }
+
+  // --- Phase A2: fill whatever slots coverage did not need, on fairness. ---
+  // The feasibility guard is what makes this safe: the greedy can never paint
   // itself into a corner, because it refuses any pick that would create one.
   const bench = available
     .filter((p) => !taken.has(p.id))
@@ -282,65 +529,34 @@ function solveInning(ctx: InningContext): SolvedInning | null {
   }
 
   // --- Phase B: which position each of them plays. ---
-  const openPositions = positions.filter((p) => assignment[p] === undefined)
   const freePlayers = chosen.filter((p) => !pinnedIds.has(p.id))
 
-  const eligible = (position: Position, player: PresentPlayer) =>
-    player.positions[position] !== undefined
-
-  // Adjacency, best candidate first, so the matching prefers Primary
-  // positions and players who have not been parked there already.
   const adjacency = new Map<Position, string[]>()
   for (const position of openPositions) {
-    const candidates = freePlayers
-      .filter((p) => eligible(position, p))
-      .map((p) => ({ id: p.id, rank: positionRank(p, position, positionCounts, rng) }))
-      .sort((a, b) => b.rank - a.rank)
-      .map((c) => c.id)
-    adjacency.set(position, candidates)
+    adjacency.set(
+      position,
+      freePlayers
+        .filter((p) => eligible(position, p))
+        .map((p) => ({ id: p.id, rank: positionRank(p, position, positionCounts, rng) }))
+        .sort((a, b) => b.rank - a.rank)
+        .map((c) => c.id),
+    )
   }
 
-  // A position nobody present is listed at is a roster-data problem worth
-  // telling the captain about. A position merely crowded out this inning is
-  // not — the restart search will usually route around it.
-  const uncoverable = openPositions.filter(
-    (position) => !available.some((p) => eligible(position, p)),
+  const { matched, unmatched } = maximumMatching(
+    byScarcity(openPositions, adjacency, rng),
+    adjacency,
   )
-
-  // Hardest position first, ties broken randomly.
-  const ordered = rng
-    .shuffle(openPositions)
-    .sort((a, b) => (adjacency.get(a)?.length ?? 0) - (adjacency.get(b)?.length ?? 0))
-
-  const byPlayer = new Map<string, Position>()
-  const unmatched: Position[] = []
-
-  // Kuhn's augmenting path. Greedy alone can strand a position whose only
-  // eligible players were already claimed; augmenting lets those earlier
-  // positions shuffle sideways so everyone still fits. It finds a perfect
-  // assignment whenever one exists for this set of fielders.
-  const assign = (position: Position, visited: Set<string>): boolean => {
-    for (const id of adjacency.get(position) ?? []) {
-      if (visited.has(id)) continue
-      visited.add(id)
-      const holder = byPlayer.get(id)
-      if (holder === undefined || assign(holder, visited)) {
-        byPlayer.set(id, position)
-        assignment[position] = id
-        return true
-      }
-    }
-    return false
-  }
-
-  for (const position of ordered) {
-    if (!assign(position, new Set())) unmatched.push(position)
+  const placed = new Set<string>()
+  for (const [position, id] of matched) {
+    assignment[position] = id
+    placed.add(id)
   }
 
   // Nobody eligible is left for these. Fill them anyway — an unfilled
   // position is a forfeit, an out-of-position fielder is just a bad inning.
   for (const position of unmatched) {
-    const leftovers = freePlayers.filter((p) => !byPlayer.has(p.id))
+    const leftovers = freePlayers.filter((p) => !placed.has(p.id))
     if (leftovers.length === 0) return null
     let pick = leftovers[0]
     let pickRank = -Infinity
@@ -351,15 +567,22 @@ function solveInning(ctx: InningContext): SolvedInning | null {
         pick = player
       }
     }
-    byPlayer.set(pick.id, position)
+    placed.add(pick.id)
     assignment[position] = pick.id
   }
 
-  return {
-    assignment,
-    relaxedCount: unmatched.length,
-    uncoverable,
+  // Roster-data problems worth telling the captain about, judged against the
+  // whole available bench rather than against who happened to be picked: a
+  // position merely crowded out this inning is not the captain's problem.
+  const uncoverable: Position[] = []
+  const subOnly: Position[] = []
+  for (const position of openPositions) {
+    const listed = available.filter((p) => eligible(position, p))
+    if (listed.length === 0) uncoverable.push(position)
+    else if (listed.every((p) => p.isSub)) subOnly.push(position)
   }
+
+  return { assignment, relaxedCount: unmatched.length, uncoverable, subOnly }
 }
 
 /**
