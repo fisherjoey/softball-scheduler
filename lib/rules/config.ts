@@ -48,6 +48,30 @@ export const WEIGHTS = {
   eligibilityRelaxed: 1000,
   /** Penalty for reusing a batting slot a player held in a recent game. */
   battingSlotRepeat: 5,
+  /**
+   * Greedy construction knobs. These are search heuristics, not league rules:
+   * they rank candidates inside a single restart, where `equalInnings` and
+   * friends above rank whole finished grids against each other.
+   *
+   * The bands are deliberately far apart rather than comparable, so a
+   * higher-priority goal always wins outright instead of being outvoted by an
+   * accumulation of lower-priority ones. Priority order: bench subs first,
+   * then even out innings, then spread positions, then honour the tiers.
+   */
+  greedy: {
+    /** Bench a sub before any roster player, whatever the innings count. */
+    subOnField: 1_000_000,
+    /** Per inning already played. Dominates every position preference. */
+    inningsPlayed: 1_000,
+    /** Per prior appearance at this position. Dominates the fit rewards. */
+    positionRepeat: 40,
+    /** Reward for a Primary position. */
+    primaryFit: 8,
+    /** Reward for a Backup position. */
+    backupFit: 4,
+    /** Random jitter, smaller than any real signal. Breaks exact ties only. */
+    jitter: 3,
+  },
 } as const
 
 export const SOLVER = {
