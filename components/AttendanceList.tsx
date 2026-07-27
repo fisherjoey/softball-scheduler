@@ -22,6 +22,8 @@ export interface AttendanceListProps {
   players: Player[]
   /** Previously saved attendance, if any (empty for a brand-new game). */
   initialAttendance: AttendanceRecord[]
+  /** True when a lineup has already been generated and saved for this game. */
+  hasLineup?: boolean
 }
 
 interface RowState {
@@ -168,7 +170,13 @@ function PlayerAttendanceRow({
  * from checkboxes nobody has committed to the database would silently
  * disagree with what the next screen reads back.
  */
-export function AttendanceList({ gameId, innings, players, initialAttendance }: AttendanceListProps) {
+export function AttendanceList({
+  gameId,
+  innings,
+  players,
+  initialAttendance,
+  hasLineup = false,
+}: AttendanceListProps) {
   const [rows, setRows] = useState<Map<string, RowState>>(() =>
     initialRowState(players, initialAttendance),
   )
@@ -313,7 +321,7 @@ export function AttendanceList({ gameId, innings, players, initialAttendance }: 
             href={`/games/${gameId}/lineup`}
             className="flex h-11 flex-1 items-center justify-center rounded-md border-2 border-zinc-900 px-4 text-base font-medium text-foreground dark:border-zinc-100"
           >
-            Generate lineup
+            {hasLineup ? 'View lineup' : 'Generate lineup'}
           </Link>
         ) : (
           <button

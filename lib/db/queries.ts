@@ -97,17 +97,42 @@ export async function setPlayerPositions(
 
 /** All games, newest first. */
 export async function listGames(): Promise<
-  Array<{ id: string; date: string; opponent: string | null; innings: number }>
+  Array<{
+    id: string
+    date: string
+    opponent: string | null
+    innings: number
+    /** True once a lineup has been generated and saved for this game. */
+    hasLineup: boolean
+    /** How many players are marked present. */
+    presentCount: number
+  }>
 > {
-  return db
+  // The list is the only place a saved lineup is discoverable, so it carries
+  // enough state to say which games are ready to open and which still need
+  // attendance taken. Both are correlated subqueries rather than joins: a join
+  // against lineups (70 rows per game) and attendance would multiply out.
+  const rows = await db
     .select({
       id: games.id,
       date: games.date,
       opponent: games.opponent,
       innings: games.innings,
+      lineupCells: sql<number>`(
+        select count(*)::int from ${lineups} where ${lineups.gameId} = ${games.id}
+      )`,
+      presentCount: sql<number>`(
+        select count(*)::int from ${gameAttendance}
+         where ${gameAttendance.gameId} = ${games.id} and ${gameAttendance.isPresent}
+      )`,
     })
     .from(games)
     .orderBy(desc(games.date), desc(games.createdAt))
+
+  return rows.map(({ lineupCells, ...game }) => ({
+    ...game,
+    hasLineup: lineupCells > 0,
+  }))
 }
 
 export interface GameDetail {

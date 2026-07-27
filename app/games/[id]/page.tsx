@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { getGame, listPlayers } from '@/lib/db/queries'
+import { getGame, getLineup, listPlayers } from '@/lib/db/queries'
 import { AttendanceList } from '@/components/AttendanceList'
 
 function formatDate(isoDate: string): string {
@@ -17,7 +17,11 @@ export default async function GameDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const [game, players] = await Promise.all([getGame(id), listPlayers()])
+  const [game, players, savedLineup] = await Promise.all([
+    getGame(id),
+    listPlayers(),
+    getLineup(id),
+  ])
   if (!game) notFound()
 
   const active = players.filter((p) => p.isActive)
@@ -35,6 +39,7 @@ export default async function GameDetailPage({
         </p>
       ) : (
         <AttendanceList
+          hasLineup={savedLineup !== null}
           gameId={game.id}
           innings={game.innings}
           players={active}

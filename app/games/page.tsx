@@ -86,19 +86,39 @@ export default async function GamesPage() {
           </p>
         ) : (
           games.map((game) => (
-            <Link
+            <div
               key={game.id}
-              href={`/games/${game.id}`}
-              className="flex min-h-11 items-center justify-between rounded-lg border border-zinc-300 px-4 py-3 dark:border-zinc-700"
+              className="flex flex-col gap-2 rounded-lg border border-zinc-300 px-4 py-3 dark:border-zinc-700"
             >
-              <span className="text-base font-medium text-foreground">
-                {formatDate(game.date)}
-                {game.opponent ? ` vs ${game.opponent}` : ''}
-              </span>
-              <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                {game.innings} inn
-              </span>
-            </Link>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-base font-medium text-foreground">
+                  {formatDate(game.date)}
+                  {game.opponent ? ` vs ${game.opponent}` : ''}
+                </span>
+                <span className="shrink-0 text-sm text-zinc-600 dark:text-zinc-400">
+                  {game.presentCount > 0 ? `${game.presentCount} here` : 'no attendance yet'}
+                </span>
+              </div>
+
+              {/* A saved lineup is the thing you came back for, so it gets its
+                  own link rather than hiding behind the attendance screen. */}
+              <div className="flex flex-wrap gap-2">
+                {game.hasLineup && (
+                  <Link
+                    href={`/games/${game.id}/lineup`}
+                    className="flex min-h-11 flex-1 items-center justify-center rounded-md border-2 border-zinc-900 bg-zinc-900 px-3 text-sm font-semibold text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                  >
+                    View lineup
+                  </Link>
+                )}
+                <Link
+                  href={`/games/${game.id}`}
+                  className="flex min-h-11 flex-1 items-center justify-center rounded-md border-2 border-zinc-400 px-3 text-sm font-semibold text-zinc-700 dark:border-zinc-600 dark:text-zinc-300"
+                >
+                  {game.hasLineup ? 'Attendance' : 'Take attendance'}
+                </Link>
+              </div>
+            </div>
           ))
         )}
       </section>
