@@ -4,6 +4,10 @@ import { getGame, getLineup, listPlayers } from '@/lib/db/queries'
 import { POSITIONS, type Player, type Position } from '@/lib/types'
 import { PrintActions } from './PrintActions'
 
+export const metadata = {
+  title: 'Print',
+}
+
 /**
  * The shareable view of a saved lineup: one table, no controls, no chrome.
  *

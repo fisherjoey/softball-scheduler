@@ -1,5 +1,9 @@
 import { LoginForm } from './LoginForm'
 
+export const metadata = {
+  title: 'Sign in',
+}
+
 /**
  * Server wrapper so the page can read `?invite=invalid` — the flag the invite
  * redemption route sets when it turns a link away. Reading it here rather

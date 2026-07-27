@@ -2,6 +2,10 @@ import { notFound } from 'next/navigation'
 import { getGame, getLineup, listPlayers } from '@/lib/db/queries'
 import { AttendanceList } from '@/components/AttendanceList'
 
+export const metadata = {
+  title: 'Attendance',
+}
+
 function formatDate(isoDate: string): string {
   const d = new Date(`${isoDate}T12:00:00Z`)
   return d.toLocaleDateString('en-CA', {

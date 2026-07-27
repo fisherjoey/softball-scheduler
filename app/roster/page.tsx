@@ -2,6 +2,10 @@ import { listPlayers } from '@/lib/db/queries'
 import { PlayerCard } from '@/components/PlayerCard'
 import type { Player } from '@/lib/types'
 
+export const metadata = {
+  title: 'Roster',
+}
+
 function Badge({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex h-6 items-center rounded-full border-2 border-zinc-400 px-2 text-xs font-bold text-zinc-700 dark:border-zinc-500 dark:text-zinc-300">

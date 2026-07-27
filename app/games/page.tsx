@@ -3,6 +3,10 @@ import { listGames } from '@/lib/db/queries'
 import { RULES } from '@/lib/rules/config'
 import { newGame } from './actions'
 
+export const metadata = {
+  title: 'Games',
+}
+
 function formatDate(isoDate: string): string {
   // Append a noon UTC time so the date doesn't shift a day back in
   // timezones behind UTC when parsed as a bare "YYYY-MM-DD".

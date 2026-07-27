@@ -4,6 +4,10 @@ import { getGame, getLineup, listPlayers, recentSlotHistory } from '@/lib/db/que
 import { LineupClient } from './LineupClient'
 import type { PresentPlayer } from '@/lib/types'
 
+export const metadata = {
+  title: 'Lineup',
+}
+
 /** How many past games the batting order rotates against. */
 const HISTORY_GAMES = 4
 
