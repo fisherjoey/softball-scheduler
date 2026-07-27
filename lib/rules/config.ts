@@ -33,8 +33,19 @@ export const RULES = {
 
 /** Fairness objective weights. Higher means the solver cares more. */
 export const WEIGHTS = {
-  /** Penalty per unit of variance in innings played across roster players. */
-  equalInnings: 10,
+  /**
+   * Penalty per unit of variance in innings played across roster players.
+   *
+   * Equal innings is the captain's first stated fairness requirement, so it
+   * has to outrank the two cosmetic goals it competes with. At the original
+   * 10 it did not: moving a player from 5 innings to 3 costs about the same
+   * as one extra appearance at the same position (`positionRepeat`, 3) or one
+   * Primary placement (`primaryFit`, 2), so the search would happily trade an
+   * uneven bench for a tidier position chart. At 100 a real innings imbalance
+   * always outweighs both, while staying below `eligibilityRelaxed` so that
+   * covering a position still beats evening out the bench.
+   */
+  equalInnings: 100,
   /** Penalty each time a player exceeds this many innings at one position. */
   positionRepeatThreshold: 2,
   positionRepeat: 3,

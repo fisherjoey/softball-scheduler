@@ -357,17 +357,74 @@ describe('buildFieldingGrid', () => {
     assertLegal(grid, present)
   })
 
+  it('keeps innings even when eligibility is uneven', () => {
+    // 14 players, 5 female, player i listed at the four consecutive positions
+    // starting at POSITIONS[i % 10]. Ten field, so 70 fielding innings across
+    // 14 players is exactly 5 each: a perfectly even split exists and no
+    // position needs anyone out of position. The solver must find it.
+    const present = Array.from({ length: 14 }, (_, i) =>
+      mkPlayer(`p${i}`, {
+        isFemale: i < 5,
+        positions: Object.fromEntries(
+          Array.from({ length: 4 }, (_, k) => [POSITIONS[(i + k) % 10], 'primary' as const]),
+        ),
+      }),
+    )
+
+    for (const seed of [1, 2, 3]) {
+      const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed })
+      const counts = new Map<string, number>(present.map((p) => [p.id, 0]))
+      for (const inning of grid.assignments) {
+        for (const id of Object.values(inning)) counts.set(id!, counts.get(id!)! + 1)
+      }
+      const values = [...counts.values()]
+      expect(Math.max(...values) - Math.min(...values), `seed ${seed}`).toBe(0)
+      assertLegal(grid, present)
+    }
+  })
+
+  it('explains a pin on an inning the game does not have', () => {
+    // Realistic when 7-inning league pins are carried into a 6-inning game.
+    const present = mkRoster(13, 5)
+    const pins = [{ inning: 7, position: 'P' as Position, playerId: 'p5' }]
+
+    const grid = buildFieldingGrid({ present, innings: 6, pins, seed: 28 })
+
+    expect(grid.assignments).toHaveLength(6)
+    expect(grid.warnings.join(' ')).toMatch(/pin of p5 at P in inning 7/)
+    expect(grid.warnings.join(' ')).toMatch(/only has 6 innings/)
+    assertLegal(grid, present)
+  })
+
   it('produces a legal grid for any legal roster', () => {
+    // Eligibility and availability are both varied here, not just roster
+    // shape: with everyone eligible everywhere and present all game, the
+    // coverage reservation is a no-op and per-inning status always equals
+    // whole-game status, so neither path would be exercised at all.
+    const eligibility = fc
+      .uniqueArray(fc.constantFrom(...POSITIONS), { minLength: 1, maxLength: POSITIONS.length })
+      .map((ps) => Object.fromEntries(ps.map((p) => [p, 'primary' as const])))
+    const availability = fc.record({
+      arrivedInning: fc.integer({ min: 1, max: 7 }),
+      leftInning: fc.option(fc.integer({ min: 1, max: 7 }), { nil: null }),
+    })
+
     fc.assert(
       fc.property(
         fc.integer({ min: 7, max: 20 }),
         fc.integer({ min: 2, max: 8 }),
         fc.integer({ min: 0, max: 4 }),
         fc.integer({ min: 0, max: 1000 }),
-        (n, rawFemales, rawSubs, seed) => {
+        fc.array(eligibility, { minLength: 20, maxLength: 20 }),
+        fc.array(availability, { minLength: 20, maxLength: 20 }),
+        (n, rawFemales, rawSubs, seed, eligibilities, availabilities) => {
           const females = Math.min(rawFemales, n)
           const subs = Math.min(rawSubs, n - 1)
-          const present = mkRoster(n, females, subs)
+          const present = mkRoster(n, females, subs).map((p, i) => ({
+            ...p,
+            positions: eligibilities[i],
+            ...availabilities[i],
+          }))
           const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed, restarts: 40 })
           assertLegal(grid, present)
           return true

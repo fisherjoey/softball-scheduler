@@ -81,12 +81,21 @@ export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
   let bestScore = -Infinity
 
   for (let r = 0; r < restarts; r++) {
-    const attempt = construct(input, perInning, locked, makeRng(mixSeed(seed, r)))
-    if (!attempt) continue
-    const score = scoreGrid(attempt.assignments, present, attempt.relaxedCount)
-    if (score > bestScore) {
-      bestScore = score
-      best = attempt
+    // Every restart is run under both selection policies, and `scoreGrid`
+    // picks. Neither policy is right on every roster: reserving for coverage
+    // buys covered positions at 1000 points each but can cost innings
+    // fairness, and where both are achievable the reservation is pure loss.
+    // Running both — rather than splitting the restart budget between them —
+    // means the search is never worse than either policy alone at full budget.
+    for (const reserveCoverage of [true, false]) {
+      const rng = makeRng(mixSeed(seed, r * 2 + (reserveCoverage ? 1 : 0)))
+      const attempt = construct(input, perInning, locked, rng, reserveCoverage)
+      if (!attempt) continue
+      const score = scoreGrid(attempt.assignments, present, attempt.relaxedCount)
+      if (score > bestScore) {
+        bestScore = score
+        best = attempt
+      }
     }
   }
 
@@ -166,6 +175,16 @@ function pinWarnings(
   const out: string[] = []
   const nameOf = (id: string) => byId.get(id)?.name ?? id
 
+  // Pins for an inning this game does not have. Realistic when 7-inning league
+  // pins are carried into a 6-inning tournament game, and invisible to the
+  // per-inning walk below because no inning number ever matches them.
+  for (const pin of pins) {
+    if (pin.inning >= 1 && pin.inning <= innings) continue
+    out.push(
+      `Could not honour the pin of ${nameOf(pin.playerId)} at ${pin.position} in inning ${pin.inning}: this game only has ${innings} innings.`,
+    )
+  }
+
   for (let inning = 1; inning <= innings; inning++) {
     const status = perInning[inning - 1]
     const seated = new Map<Position, string>()
@@ -244,6 +263,7 @@ function construct(
   perInning: RosterStatus[],
   locked: InningAssignment[],
   rng: Rng,
+  reserveCoverage: boolean,
 ): Attempt | null {
   const { present, innings, pins } = input
   const byId = new Map(present.map((p) => [p.id, p]))
@@ -283,6 +303,7 @@ function construct(
         inningsPlayed,
         positionCounts,
         rng,
+        reserveCoverage,
       })
     }
     if (!solved) return null
@@ -309,6 +330,8 @@ interface InningContext {
   inningsPlayed: Map<string, number>
   positionCounts: Map<string, number>
   rng: Rng
+  /** Reserve the players maximum coverage needs before fairness spends slots. */
+  reserveCoverage: boolean
 }
 
 interface SolvedInning {
@@ -409,6 +432,56 @@ function byScarcity(
     .sort((a, b) => (adjacency.get(a)?.length ?? 0) - (adjacency.get(b)?.length ?? 0))
 }
 
+/**
+ * The fairest set of players that still covers everything coverable.
+ *
+ * Coverage has to constrain who plays, not choose who plays. Reserving every
+ * player a maximum matching happens to name fills the whole defence and leaves
+ * fairness no vote at all, because Kuhn's maximises cardinality and is
+ * indifferent to which of several equally-covering players it picks.
+ *
+ * The sets of players that can be simultaneously matched to distinct eligible
+ * positions are the independent sets of a transversal matroid, and greedy is
+ * optimal on a matroid: walk players best-first and keep each one whose
+ * addition preserves matchability. That yields a set of maximum size — so no
+ * coverage is lost — and of maximum total fairness weight among all such sets.
+ * Players it does not reserve are genuinely interchangeable for coverage, so
+ * fairness alone decides them.
+ *
+ * A player is reserved only when every maximum matching must contain them:
+ * the sole eligible catcher is reserved and plays; the ninth interchangeable
+ * outfielder is not.
+ */
+function reserveForCoverage(
+  benchInFairnessOrder: PresentPlayer[],
+  openPositions: Position[],
+  byId: Map<string, PresentPlayer>,
+  eligible: (position: Position, player: PresentPlayer) => boolean,
+): Set<string> {
+  const holder = new Map<Position, string>()
+  const reserved = new Set<string>()
+
+  const augment = (player: PresentPlayer, visited: Set<Position>): boolean => {
+    for (const position of openPositions) {
+      if (visited.has(position)) continue
+      if (!eligible(position, player)) continue
+      visited.add(position)
+      const current = holder.get(position)
+      const currentPlayer = current === undefined ? undefined : byId.get(current)
+      if (currentPlayer === undefined || augment(currentPlayer, visited)) {
+        holder.set(position, player.id)
+        return true
+      }
+    }
+    return false
+  }
+
+  for (const player of benchInFairnessOrder) {
+    if (augment(player, new Set())) reserved.add(player.id)
+  }
+  return reserved
+}
+
 function solveInning(ctx: InningContext): SolvedInning | null {
   const {
     inning,
@@ -420,6 +493,7 @@ function solveInning(ctx: InningContext): SolvedInning | null {
     inningsPlayed,
     positionCounts,
     rng,
+    reserveCoverage,
   } = ctx
 
   const size = positions.length
@@ -481,51 +555,41 @@ function solveInning(ctx: InningContext): SolvedInning | null {
 
   const openPositions = positions.filter((p) => assignment[p] === undefined)
 
-  // --- Phase A1: cover the specialists first. ---
-  // Choosing fielders on fairness alone quietly benches the one person who can
-  // catch, because "who deserves an inning" says nothing about "who can cover
-  // C". So before fairness gets a say, match every open position against the
-  // whole available bench and reserve the players that maximum coverage needs.
-  // Adjacency is in fairness order, so where a position has several eligible
-  // players the matching still takes the one most deserving of an inning; the
-  // ordering only binds where a position has exactly one candidate.
-  const coverAdjacency = new Map<Position, string[]>()
-  for (const position of openPositions) {
-    coverAdjacency.set(
-      position,
-      available
-        .filter((p) => !taken.has(p.id) && eligible(position, p))
-        .map((p) => ({ id: p.id, rank: fieldingRank(p, inningsPlayed, rng) }))
-        .sort((a, b) => b.rank - a.rank)
-        .map((c) => c.id),
-    )
-  }
-  const coverOrder = byScarcity(openPositions, coverAdjacency, rng)
-  const cover = maximumMatching(coverOrder, coverAdjacency)
-
-  // Scarcest position first, so when the gender guard starts refusing players
-  // it refuses them for positions that still have plenty of other candidates.
-  for (const position of coverOrder) {
-    if (chosen.length >= size) break
-    const id = cover.matched.get(position)
-    if (id === undefined) continue
-    const player = byId.get(id)
-    if (!player || taken.has(id) || !keepsFeasible(player)) continue
-    take(player)
-  }
-
-  // --- Phase A2: fill whatever slots coverage did not need, on fairness. ---
-  // The feasibility guard is what makes this safe: the greedy can never paint
-  // itself into a corner, because it refuses any pick that would create one.
+  // One fairness ordering, used by both halves of the selection so they agree
+  // on who is most owed an inning.
   const bench = available
     .filter((p) => !taken.has(p.id))
     .map((p) => ({ player: p, rank: fieldingRank(p, inningsPlayed, rng) }))
     .sort((a, b) => b.rank - a.rank)
+    .map((entry) => entry.player)
 
+  // --- Phase A: who fields this inning. ---
+  // Fairness is the selector; coverage is only a constraint on it. Reserve the
+  // players coverage genuinely requires, then let fairness spend every slot
+  // coverage did not claim. The feasibility guard gates every take, so the
+  // greedy can never paint itself into a corner: it refuses any pick that
+  // would create one, and legality outranks both other goals.
+  const reserved = reserveCoverage
+    ? reserveForCoverage(bench, openPositions, byId, eligible)
+    : new Set<string>()
+  let freeSlots = openPositions.length - reserved.size
+
+  for (const player of bench) {
+    if (chosen.length >= size) break
+    if (!keepsFeasible(player)) continue
+    if (!reserved.has(player.id)) {
+      if (freeSlots <= 0) continue
+      freeSlots--
+    }
+    take(player)
+  }
+
+  // A reserved player refused on legality leaves a hole. Fill it with the next
+  // fair, legal body — a covered position is worth less than a legal inning.
   while (chosen.length < size) {
-    const next = bench.find(({ player }) => !taken.has(player.id) && keepsFeasible(player))
+    const next = bench.find((player) => !taken.has(player.id) && keepsFeasible(player))
     if (!next) return null
-    take(next.player)
+    take(next)
   }
 
   // --- Phase B: which position each of them plays. ---
