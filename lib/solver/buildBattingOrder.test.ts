@@ -52,11 +52,21 @@ describe('buildBattingOrder', () => {
   })
 
   it('inserts an automatic out at every 3rd female spot when only 2 women are present', () => {
-    // 10 batters need 3 female spots; with 2 women, spot 3 is an out.
+    // 8 men present need at least 4 female slots to keep any run legal
+    // (ceil((8-1)/2) = 4); with only 2 women, every 3rd of those 4 female
+    // slots is an out, leaving 3 real female slots for 2 women (one repeats).
     const present = mkRoster(10, 2)
     const order = buildBattingOrder({ present, history: [], seed: 3 })
     expect(order.slots.filter((s) => s.kind === 'autoOut')).toHaveLength(1)
     expect(order.warnings.join(' ')).toMatch(/automatic out/i)
+
+    // Every man present bats exactly once, and both women appear.
+    const playerIds = order.slots.filter(isPlayerSlot).map((s) => s.playerId)
+    const maleIds = playerIds.filter((id) => !present.find((p) => p.id === id)!.isFemale)
+    const femaleIds = playerIds.filter((id) => present.find((p) => p.id === id)!.isFemale)
+    expect(new Set(maleIds).size).toBe(present.filter((p) => !p.isFemale).length)
+    expect(maleIds).toHaveLength(new Set(maleIds).size)
+    expect(new Set(femaleIds).size).toBe(2)
   })
 
   it('rotates players off slots they held in recent games', () => {

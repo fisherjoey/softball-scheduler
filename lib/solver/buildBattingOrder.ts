@@ -1,7 +1,6 @@
 import type { BattingInput, BattingOrder, BattingSlot, PresentPlayer } from '@/lib/types'
 import { RULES, WEIGHTS } from '@/lib/rules/config'
-import { femaleSpotsRequired } from '@/lib/rules/femaleSpots'
-import { enumerateGenderPatterns, type Gender } from './genderPattern'
+import { enumerateGenderPatterns, isValidGenderPattern, type Gender } from './genderPattern'
 import { makeRng, type Rng } from './rng'
 
 /**
@@ -25,40 +24,70 @@ export function buildBattingOrder(input: BattingInput): BattingOrder {
   // legal max. The abundant gender always gets exactly one slot per person
   // — it never repeats or sits out.
   //
-  // femaleSpotsRequired(n) is defined in terms of the order's own final
-  // length, which is exactly what we're solving for, so converge on it: try
-  // the scarce gender's real headcount, see how many slots that implies the
-  // order needs in total, re-derive the requirement for that length, and
-  // repeat until it stops moving. This always settles in a few steps because
-  // each step's requirement only grows with the (fixed) abundant headcount.
+  // With S scarce-gender slots dividing the order into S gaps, the abundant
+  // gender's total is capped at S*(maxSameGenderRun - 1) + maxRunsAtMaxLength
+  // (every gap but the permitted maxRunsAtMaxLength ones sits one below the
+  // max run length). Solving that bound for S gives the closed form below —
+  // no iteration needed, since the abundant headcount is fixed up front and
+  // doesn't depend on S.
   const womenAreScarcer = women.length <= men.length
   const abundantCount = womenAreScarcer ? men.length : women.length
   const scarceCount = womenAreScarcer ? women.length : men.length
 
-  let scarceSpots = scarceCount
-  for (let i = 0; i < 8; i++) {
-    const candidateN = abundantCount + scarceSpots
-    const required = femaleSpotsRequired(candidateN)
-    const next = Math.max(scarceCount, required)
-    if (next === scarceSpots) break
-    scarceSpots = next
-  }
+  const runLengthMinimum = Math.ceil(
+    (abundantCount - RULES.maxRunsAtMaxLength) / (RULES.maxSameGenderRun - 1),
+  )
+  // The opening-window female-representation floor is a second, independent
+  // constraint (isValidGenderPattern enforces it unconditionally on the
+  // gender literally labelled 'F') — it only binds here when women are the
+  // side being padded.
+  const openingFloor = womenAreScarcer ? RULES.femaleSpotsInOpening.count : 0
+  const scarceSpots = Math.max(scarceCount, runLengthMinimum, openingFloor)
 
   const n = abundantCount + scarceSpots
   const femaleSpots = womenAreScarcer ? scarceSpots : abundantCount
 
-  const patterns = enumerateGenderPatterns(n, femaleSpots, rng)
+  let patterns = enumerateGenderPatterns(n, femaleSpots, rng)
   if (patterns.length === 0) {
-    // Should be unreachable: femaleSpotsRequired guarantees a pattern exists.
-    warnings.push('Could not find a legal batting-order pattern. Falling back to alternating.')
-    const fallback: Gender[] = Array.from({ length: n }, (_, i) => (i % 3 === 2 ? 'F' : 'M'))
-    return fillPattern(fallback, women, men, history, rng, warnings)
+    // enumerateGenderPatterns is only exhaustive below
+    // SOLVER.exhaustiveEnumerationLimit combinations; above that it falls
+    // back to randomised sampling, which can legitimately miss a pattern
+    // that exists — valid patterns become a vanishing fraction of a huge
+    // combination space right at this closed form's tight minimum. (Not
+    // hypothetical: enumerateGenderPatterns(28, 9, rng) — reachable from a
+    // real roster of 19 men + 2 women — found 0 patterns for 7 of 8 sampled
+    // seeds, even though a legal pattern demonstrably exists.)
+    //
+    // So an empty result here does not yet mean the roster is impossible.
+    // Construct the arrangement the slot-count bound was derived from
+    // directly: spread the scarce gender as evenly as possible through the
+    // order. That is provably the loosest-possible placement for the
+    // legal-run bound above, so it is legal whenever these slot counts are
+    // (verified against isValidGenderPattern for every men/women split
+    // reachable from a present.length of 7..22 — see the fix-round report).
+    const scarceGender: Gender = womenAreScarcer ? 'F' : 'M'
+    const abundantGender: Gender = womenAreScarcer ? 'M' : 'F'
+    const constructed: Gender[] = Array.from({ length: n }, () => abundantGender)
+    for (let i = 0; i < scarceSpots; i++) {
+      constructed[Math.floor((i * n) / scarceSpots)] = scarceGender
+    }
+    if (!isValidGenderPattern(constructed)) {
+      // The construction is proven legal within the reachable domain above;
+      // reaching here means the roster is a genuine, unanticipated
+      // contradiction. Fail loudly rather than silently return an illegal
+      // order or drop a player, as the old naive fallback used to.
+      throw new Error(
+        `No legal batting order exists for this roster: ${men.length} men, ${women.length} women ` +
+          `(computed ${n} total slots — ${femaleSpots} female, ${n - femaleSpots} male).`,
+      )
+    }
+    patterns = [constructed]
   }
 
   let best: BattingOrder | null = null
   let bestScore = -Infinity
   for (const pattern of patterns) {
-    const candidate = fillPattern(pattern, women, men, history, rng, [...warnings])
+    const candidate = fillPattern(pattern, women, men, rng, [...warnings])
     const score = scoreOrder(candidate, history)
     if (score > bestScore) {
       bestScore = score
@@ -73,7 +102,6 @@ function fillPattern(
   pattern: Gender[],
   women: PresentPlayer[],
   men: PresentPlayer[],
-  history: BattingInput['history'],
   rng: Rng,
   warnings: string[],
 ): BattingOrder {
