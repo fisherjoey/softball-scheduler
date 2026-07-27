@@ -53,3 +53,47 @@ Notes:
 - The real value lives in Bitwarden (`softball-database-url`) and is supplied at
   runtime via `bw-agent exec softball-database-url --env DATABASE_URL -- <cmd>`.
   It is never committed, never placed in `.env.local`, and never printed.
+
+## Running migrations (`drizzle-kit push`)
+
+`drizzle-kit push`'s introspection step (`[Pulling schema from database...]`)
+fires several per-table metadata queries concurrently over a single
+connection. Supabase's **transaction pooler** (port 6543, the one the app
+uses) multiplexes each statement to a possibly different backend session and
+does not support that concurrency; once there are real tables to introspect,
+this reliably crashes `drizzle-kit push` with
+`TypeError: Cannot read properties of undefined (reading 'replace')` deep in
+its check-constraint parsing (a result row from the wrong query gets
+attributed to the wrong statement). It does **not** show up on a brand-new,
+empty schema, which is why the very first push in this project worked fine.
+
+Workaround: run `drizzle-kit push` itself (only this one-off CLI operation,
+never the app's runtime connection) against the same credential's **session
+pooler** port instead — same host, same username/password, just `5432`
+instead of `6543`. This is a standard Supabase convention (the pooler serves
+both modes on the same hostname), not a different secret:
+
+```bash
+~/.local/bin/bw-agent exec softball-database-url --env DATABASE_URL -- node -e "
+  const { execSync } = require('child_process');
+  const u = new URL(process.env.DATABASE_URL);
+  u.port = '5432';
+  process.env.DATABASE_URL = u.toString();
+  execSync('npx drizzle-kit push', { stdio: 'inherit', env: process.env });
+"
+```
+
+`lib/db/client.ts` (the app's own connection) keeps using the transaction
+pooler on 6543 with `{ prepare: false }` — this workaround only applies to
+one-off `drizzle-kit` CLI runs.
+
+## Running the database integration test
+
+`lib/db/queries.integration.test.ts` round-trips real rows against the live
+database and cleans up after itself. It's excluded from the default `npm
+test` (via `vitest.config.ts`'s exclude glob) so the everyday unit suite
+never needs a connection. Run it deliberately:
+
+```bash
+~/.local/bin/bw-agent exec softball-database-url --env DATABASE_URL -- npm run test:db
+```

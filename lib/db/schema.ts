@@ -4,9 +4,11 @@ import {
   text,
   boolean,
   integer,
+  real,
   date,
   timestamp,
   primaryKey,
+  jsonb,
 } from 'drizzle-orm/pg-core'
 
 export const softball = pgSchema('softball')
@@ -84,3 +86,22 @@ export const battingOrders = softball.table(
   },
   (t) => ({ pk: primaryKey({ columns: [t.gameId, t.slot] }) }),
 )
+
+/**
+ * Solver-run metadata for a saved lineup, one row per game. Kept separate
+ * from `games` because this describes the lineup, not the game, and it lets
+ * `saveLineup`/`getLineup` own it end to end. Persisted (not re-derived on
+ * read) because the solver is history-dependent: re-solving later would
+ * produce different warnings/score than what was actually saved and shown
+ * to the captain.
+ */
+export const lineupMeta = softball.table('lineup_meta', {
+  gameId: uuid('game_id')
+    .primaryKey()
+    .references(() => games.id, { onDelete: 'cascade' }),
+  gridWarnings: jsonb('grid_warnings').notNull().default([]),
+  gridScore: real('grid_score'),
+  gridSeed: integer('grid_seed'),
+  battingWarnings: jsonb('batting_warnings').notNull().default([]),
+  battingPattern: jsonb('batting_pattern'),
+})

@@ -8,6 +8,13 @@
       "when": 1785173240712,
       "tag": "0000_pretty_stardust",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785173802624,
+      "tag": "0001_gorgeous_prodigy",
+      "breakpoints": true
     }
   ]
 }

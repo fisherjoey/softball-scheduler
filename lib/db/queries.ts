@@ -1,6 +1,6 @@
 import { asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from './client'
-import { battingOrders, gameAttendance, games, playerPositions, players, lineups } from './schema'
+import { battingOrders, gameAttendance, games, playerPositions, players, lineups, lineupMeta } from './schema'
 import { toPlayer, type PlayerRow, type PositionRow } from './mappers'
 import { RULES } from '@/lib/rules/config'
 import {
@@ -190,17 +190,19 @@ export async function setAttendance(
 }
 
 /**
- * Replaces a game's saved fielding grid and batting order wholesale.
- *
- * The schema has no columns for `score`, `seed`, grid `warnings`, or order
- * `pattern`/`warnings` — those are solver-run metadata, not durable roster
- * facts, so only the assignments and batting slots (including autoOut) are
- * persisted. `getLineup` reconstructs the rest with defaults.
+ * Replaces a game's saved fielding grid and batting order wholesale,
+ * including the solver-run metadata (grid warnings/score/seed, batting
+ * warnings/pattern). That metadata is persisted rather than re-derived on
+ * read: the solver is history-dependent (`recentSlotHistory` changes as more
+ * games are saved), so re-solving later would produce a different grid with
+ * different warnings than the one actually shown to and saved by the
+ * captain. All three tables commit or none do.
  */
 export async function saveLineup(gameId: string, grid: FieldingGrid, order: BattingOrder): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.delete(lineups).where(eq(lineups.gameId, gameId))
     await tx.delete(battingOrders).where(eq(battingOrders.gameId, gameId))
+    await tx.delete(lineupMeta).where(eq(lineupMeta.gameId, gameId))
 
     const lineupRows: Array<{ gameId: string; inning: number; position: string; playerId: string }> = []
     grid.assignments.forEach((inningAssignment, idx) => {
@@ -224,6 +226,15 @@ export async function saveLineup(gameId: string, grid: FieldingGrid, order: Batt
     if (battingRows.length > 0) {
       await tx.insert(battingOrders).values(battingRows)
     }
+
+    await tx.insert(lineupMeta).values({
+      gameId,
+      gridWarnings: grid.warnings,
+      gridScore: grid.score,
+      gridSeed: grid.seed,
+      battingWarnings: order.warnings,
+      battingPattern: order.pattern,
+    })
   })
 }
 
@@ -246,6 +257,8 @@ export async function getLineup(
     .where(eq(battingOrders.gameId, gameId))
     .orderBy(asc(battingOrders.slot))
 
+  const [meta] = await db.select().from(lineupMeta).where(eq(lineupMeta.gameId, gameId))
+
   if (lineupRows.length === 0 && battingRows.length === 0) return null
 
   const assignments: InningAssignment[] = Array.from({ length: game.innings }, () => ({}))
@@ -259,19 +272,27 @@ export async function getLineup(
   const slots: BattingSlot[] = battingRows.map((row) =>
     row.playerId ? { kind: 'player', playerId: row.playerId } : { kind: 'autoOut' },
   )
-  // Autos-outs stand in for a female slot the CSSC rule forces; player slots
-  // reflect the actual player's gender. Neither is persisted, so it is
-  // reconstructed rather than round-tripped verbatim.
-  const pattern: ('F' | 'M')[] = battingRows.map((row) => (row.playerId ? (row.isFemale ? 'F' : 'M') : 'F'))
+
+  // Prefer the stored pattern. It is only inferred as a fallback for lineups
+  // saved before `lineup_meta` existed — inferring from the CURRENT
+  // players.isFemale would otherwise silently rewrite the pattern of every
+  // historical lineup whenever a player's gender flag is corrected.
+  const pattern: ('F' | 'M')[] =
+    (meta?.battingPattern as ('F' | 'M')[] | null | undefined) ??
+    battingRows.map((row) => (row.playerId ? (row.isFemale ? 'F' : 'M') : 'F'))
 
   const grid: FieldingGrid = {
     innings: game.innings,
     assignments,
-    warnings: [],
-    score: 0,
-    seed: 0,
+    warnings: (meta?.gridWarnings as string[] | undefined) ?? [],
+    score: meta?.gridScore ?? 0,
+    seed: meta?.gridSeed ?? 0,
   }
-  const order: BattingOrder = { slots, pattern, warnings: [] }
+  const order: BattingOrder = {
+    slots,
+    pattern,
+    warnings: (meta?.battingWarnings as string[] | undefined) ?? [],
+  }
 
   return { grid, order }
 }

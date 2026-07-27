@@ -29,6 +29,14 @@ describe('toPlayer', () => {
     )
     expect(player.positions).toEqual({})
   })
+
+  it('drops unknown tier strings rather than trusting the database', () => {
+    const player = toPlayer(
+      { id: 'a', name: 'Sarah', isFemale: true, isSub: false, isActive: true },
+      [{ playerId: 'a', position: 'SS', tier: 'starter' }],
+    )
+    expect(player.positions).toEqual({})
+  })
 })
 
 describe('toPresentPlayer', () => {
