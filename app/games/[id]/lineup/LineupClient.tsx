@@ -96,23 +96,7 @@ export function LineupClient({
 }: LineupClientProps) {
   const status = useMemo(() => validateRoster(present), [present])
 
-  /**
-   * A saved lineup is a snapshot: it names whoever was ticked present when it
-   * was generated. Change attendance afterwards and the saved grid still shows
-   * the old names, which silently disagrees with the roster the captain is
-   * looking at. Name them and say what to do rather than leaving it to be
-   * noticed at the diamond.
-   */
-  const staleNames = useMemo(() => {
-    if (!saved) return []
-    const presentIds = new Set(present.map((p) => p.id))
-    const nameOf = new Map(roster.map((p) => [p.id, p.name]))
-    const ids = new Set(saved.grid.assignments.flatMap((inning) => Object.values(inning)))
-    return [...ids]
-      .filter((id) => !presentIds.has(id))
-      .map((id) => nameOf.get(id) ?? id)
-      .sort((a, b) => a.localeCompare(b))
-  }, [saved, present, roster])
+
 
   const [pins, setPins] = useState<Pin[]>([])
   const [lockedThrough, setLockedThrough] = useState(0)
@@ -144,6 +128,44 @@ export function LineupClient({
   })
 
   const [lineup, setLineup] = useState<Lineup | null>(initial.lineup)
+
+  /**
+   * A saved lineup is a snapshot: it names whoever was ticked present when it
+   * was generated. Change attendance afterwards and the saved grid still shows
+   * the old names, which silently disagrees with the roster the captain is
+   * looking at. Name them and say what to do rather than leaving it to be
+   * noticed at the diamond.
+   */
+  const stale = useMemo(() => {
+    // Checked against the lineup ON SCREEN, not the saved one: after a rebuild
+    // the visible lineup is already correct, and a warning that outlives the
+    // fix teaches the captain to ignore it.
+    if (!lineup) return null
+    const presentIds = new Set(present.map((p) => p.id))
+    const nameOf = new Map(roster.map((p) => [p.id, p.name]))
+
+    // Both surfaces matter, and they hold different people: the grid names
+    // only the ten on the field, while the order names everyone who bats. A
+    // check against the grid alone misses anybody who bats without fielding.
+    const inLineup = new Set<string>([
+      ...lineup.grid.assignments.flatMap((inning) => Object.values(inning)),
+      ...lineup.order.slots.flatMap((slot) => (slot.kind === 'player' ? [slot.playerId] : [])),
+    ])
+
+    const byName = (a: string, b: string) => a.localeCompare(b)
+    const gone = [...inLineup]
+      .filter((id) => !presentIds.has(id))
+      .map((id) => nameOf.get(id) ?? id)
+      .sort(byName)
+    // The dangerous direction: somebody ticked present who is nowhere in the
+    // saved lineup does not bat at all, and nothing else on this screen says so.
+    const missing = present
+      .filter((p) => !inLineup.has(p.id))
+      .map((p) => p.name)
+      .sort(byName)
+
+    return gone.length || missing.length ? { gone, missing } : null
+  }, [lineup, present, roster])
   const [genError, setGenError] = useState<string | null>(initial.error)
   const [dirty, setDirty] = useState(saved === null && initial.lineup !== null)
 
@@ -331,18 +353,34 @@ export function LineupClient({
         </button>
       </div>
 
-      {staleNames.length > 0 && (
+      {stale && (
         <div
           role="status"
-          className="rounded-lg border-2 border-amber-600 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500 dark:bg-amber-950 dark:text-amber-100"
+          className="flex flex-col gap-2 rounded-lg border-2 border-amber-600 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500 dark:bg-amber-950 dark:text-amber-100"
         >
-          <p className="font-semibold">This saved lineup is out of date.</p>
-          <p className="mt-1">
-            It still fields {staleNames.length}{' '}
-            {staleNames.length === 1 ? 'player who is' : 'players who are'} no longer marked
-            present: {staleNames.join(', ')}. Reshuffle to rebuild it from who is here now, or fix
-            attendance if they are actually playing.
-          </p>
+          <p className="font-semibold">This saved lineup no longer matches who is here.</p>
+          {stale.missing.length > 0 && (
+            <p>
+              <span className="font-semibold">
+                {stale.missing.join(', ')}{' '}
+                {stale.missing.length === 1 ? 'is' : 'are'} present but not in it
+              </span>{' '}
+              — {stale.missing.length === 1 ? 'they would' : 'they would'} not bat at all.
+            </p>
+          )}
+          {stale.gone.length > 0 && (
+            <p>
+              It still uses {stale.gone.join(', ')}, who{' '}
+              {stale.gone.length === 1 ? 'is' : 'are'} no longer marked present.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={reshuffle}
+            className="flex h-11 items-center justify-center self-start rounded-md border-2 border-amber-700 px-4 text-sm font-semibold text-amber-900 dark:border-amber-400 dark:text-amber-100"
+          >
+            Rebuild from who is here
+          </button>
         </div>
       )}
 
