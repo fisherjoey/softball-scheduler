@@ -1,11 +1,17 @@
 import Link from 'next/link'
 import { listGames } from '@/lib/db/queries'
 import { RULES } from '@/lib/rules/config'
-import { newGame } from './actions'
+import { NewGameForm } from './NewGameForm'
 
 export const metadata = {
   title: 'Games',
 }
+
+// Render per-request, never at build time. A static build would freeze the
+// game list (and its attendance/lineup badges) at deploy time — and bake in
+// a "today" default computed on the build machine. It also means the build
+// itself no longer needs a reachable database.
+export const dynamic = 'force-dynamic'
 
 function formatDate(isoDate: string): string {
   // Append a noon UTC time so the date doesn't shift a day back in
@@ -20,7 +26,10 @@ function formatDate(isoDate: string): string {
 
 export default async function GamesPage() {
   const games = await listGames()
-  const today = new Date().toISOString().slice(0, 10)
+  // The team's "today", not UTC's: games are created evenings, and Calgary
+  // evenings are already tomorrow in UTC — `toISOString()` here would default
+  // every after-6pm game to the wrong date. en-CA formats as YYYY-MM-DD.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Edmonton' })
 
   return (
     <main className="flex flex-1 flex-col gap-6 px-4 py-6 sm:px-6">
@@ -30,57 +39,7 @@ export default async function GamesPage() {
         <summary className="flex min-h-11 cursor-pointer select-none items-center px-4 py-3 text-base font-medium text-foreground">
           + New game
         </summary>
-        <form
-          action={newGame}
-          className="flex flex-col gap-4 border-t border-zinc-200 p-4 dark:border-zinc-800"
-        >
-          <div className="flex flex-col gap-1">
-            <label htmlFor="date" className="text-sm font-medium text-foreground">
-              Date
-            </label>
-            <input
-              id="date"
-              name="date"
-              type="date"
-              required
-              defaultValue={today}
-              className="w-full rounded-md border border-zinc-300 bg-transparent px-4 py-3 text-base text-foreground dark:border-zinc-700"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="opponent" className="text-sm font-medium text-foreground">
-              Opponent
-            </label>
-            <input
-              id="opponent"
-              name="opponent"
-              placeholder="Opponent (optional)"
-              className="w-full rounded-md border border-zinc-300 bg-transparent px-4 py-3 text-base text-foreground dark:border-zinc-700"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="innings" className="text-sm font-medium text-foreground">
-              Innings
-            </label>
-            <input
-              id="innings"
-              name="innings"
-              type="number"
-              min={1}
-              defaultValue={RULES.inningsPerGame}
-              className="w-full rounded-md border border-zinc-300 bg-transparent px-4 py-3 text-base text-foreground dark:border-zinc-700"
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="flex h-11 items-center justify-center rounded-md bg-zinc-900 px-4 text-base font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Create game
-          </button>
-        </form>
+        <NewGameForm defaultDate={today} defaultInnings={RULES.inningsPerGame} />
       </details>
 
       <section className="flex flex-col gap-3" aria-label="Games">

@@ -141,5 +141,10 @@ describe.skipIf(!process.env.DATABASE_URL)('db queries integration', () => {
     const history = await recentSlotHistory(4)
     expect(history.find((h) => h.playerId === playerId)?.slots).toContain(0)
     expect(history.find((h) => h.playerId === playerId2)?.slots).toContain(2)
+
+    // With the game itself excluded — as the lineup page does when rebuilding
+    // that game, so its own saved order can't rotate against itself — this is
+    // the only game with a batting order, so the history must be empty.
+    expect(await recentSlotHistory(4, gameId)).toEqual([])
   })
 })

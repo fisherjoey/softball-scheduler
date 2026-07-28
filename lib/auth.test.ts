@@ -1,5 +1,11 @@
-import { describe, it, expect, beforeAll } from 'vitest'
-import { signInvite, signSession, signSessionAt, verifyInvite, verifySession } from './auth'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
+
+// `server-only` is an import-time tripwire: its default (non react-server)
+// entry throws. Vitest resolves the default condition, so stub it out the
+// same way Next's server bundler empties it.
+vi.mock('server-only', () => ({}))
+
+import { safeEqual, signInvite, signSession, signSessionAt, verifyInvite, verifySession } from './auth'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -128,5 +134,60 @@ describe('domain separation between session and invite tokens', () => {
   it('refuses an already-expired invite as a session, on the signature alone', async () => {
     const recentInvite = await signInvite(Date.now() - 1000)
     expect(await verifySession(recentInvite)).toBe(false)
+  })
+})
+
+describe('safeEqual', () => {
+  it('accepts equal strings', async () => {
+    expect(await safeEqual('hunter2', 'hunter2')).toBe(true)
+  })
+
+  it('rejects different strings of the same length', async () => {
+    expect(await safeEqual('hunter2', 'hunter3')).toBe(false)
+  })
+
+  /**
+   * The interesting case: raw bytes fed straight to a constant-time comparator
+   * would hit its length check first, and a length check on a password is a
+   * password-length oracle. Digesting both sides first makes every comparison
+   * a fixed 32-vs-32 bytes, so different-length inputs must come back plain
+   * false — never a throw, never an early exit an attacker can time.
+   */
+  it('rejects different-length strings without throwing', async () => {
+    expect(await safeEqual('short', 'a-much-longer-candidate-password')).toBe(false)
+    expect(await safeEqual('', 'x')).toBe(false)
+  })
+
+  it('accepts two empty strings', async () => {
+    expect(await safeEqual('', '')).toBe(true)
+  })
+})
+
+describe('SESSION_SECRET entropy floor', () => {
+  /**
+   * Invite links hand HMAC tags to third parties, so the secret is exposed to
+   * offline guessing. A human-memorable passphrase falls to that; refusing to
+   * sign with fewer than 32 characters turns a weak deployment into a loud
+   * startup error instead of a quiet vulnerability.
+   */
+  it('refuses to sign with a short secret', async () => {
+    const original = process.env.SESSION_SECRET
+    process.env.SESSION_SECRET = 'hunter2'
+    try {
+      await expect(signSession()).rejects.toThrow(/at least 32 characters/)
+      await expect(signInvite(Date.now() + DAY_MS)).rejects.toThrow(/at least 32 characters/)
+    } finally {
+      process.env.SESSION_SECRET = original
+    }
+  })
+
+  it('signs with a secret of exactly 32 characters', async () => {
+    const original = process.env.SESSION_SECRET
+    process.env.SESSION_SECRET = 'x'.repeat(32)
+    try {
+      expect(await verifySession(await signSession())).toBe(true)
+    } finally {
+      process.env.SESSION_SECRET = original
+    }
   })
 })

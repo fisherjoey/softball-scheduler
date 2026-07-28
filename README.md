@@ -130,3 +130,24 @@ writes nothing to disk:
 
 Ready for `vercel deploy`. Three environment variables must be set on the Vercel project, for every
 environment it should run in: `DATABASE_URL`, `APP_PASSWORD`, `SESSION_SECRET`.
+
+### Security notes for the deployed site
+
+- **`APP_PASSWORD` must be long and random** — a generated 20+ character string, not a
+  memorable phrase. The login endpoint is reachable by anyone on the internet, and on
+  serverless there is no in-process rate limiting (each guess may land on a fresh instance),
+  so password entropy is the primary control. The app adds a flat delay on failed attempts
+  and logs each one with the caller's IP, but those only slow and surface an attack.
+- **Add a Vercel WAF rate-limit rule on `POST /login`** (Project → Firewall). That is where
+  real request throttling lives on this platform; a handful of attempts per minute per IP is
+  plenty for one captain typing a password.
+- **`SESSION_SECRET` must be 32+ random characters** — the app refuses to start signing with
+  less. Invite links carry HMAC tags signed with it into text messages and chat logs, so a
+  guessable secret is an offline-crackable one.
+- **Post-incident revocation = rotate `SESSION_SECRET`.** There is no per-user or per-link
+  revoke: rotating the secret invalidates every session cookie *and* every outstanding invite
+  link at once, including yours. That is the whole procedure — rotate it in Vercel, redeploy,
+  and everyone signs back in with the password. Rotate `APP_PASSWORD` too if it may have
+  leaked. Watch the runtime logs for `login: failed attempt` bursts to judge whether an
+  incident is ongoing.
+- Invite links expire on their own after 7 days; sessions last 30.

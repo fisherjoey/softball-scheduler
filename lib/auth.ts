@@ -1,3 +1,9 @@
+// The secret this module signs with must never reach a client bundle. The
+// marker is safe in the Edge middleware bundle too: Next resolves the
+// middleware layer with react-server conditions, under which `server-only`
+// is the empty module.
+import 'server-only'
+
 /**
  * Session token signing/verification for the single shared-password gate.
  *
@@ -35,14 +41,31 @@ const INVITE_PREFIX = 'invite:'
  * it is covered by the HMAC, so nobody can push it out without the secret.
  * The cap is a guard against our own side: a bug (or a fat-fingered call)
  * that mints a link good until the year 9999 is a permanent credential, and
- * this refuses to honour one. Generous enough for the 30-day default.
+ * this refuses to honour one. Generous enough for the 7-day default.
  */
 const MAX_INVITE_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * Entropy floor for the signing secret.
+ *
+ * Invite links put HMAC tags in third parties' hands (text messages, browser
+ * histories), so the secret is exposed to offline guessing with no rate limit
+ * and no logging. A human-chosen passphrase falls to that. 32 characters is
+ * the point where even a low-entropy character set is out of reach; refusing
+ * shorter turns a weak deployment into a loud startup error instead of a
+ * quiet vulnerability.
+ */
+const MIN_SECRET_LENGTH = 32
 
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET
   if (!secret) {
     throw new Error('SESSION_SECRET environment variable is not set')
+  }
+  if (secret.length < MIN_SECRET_LENGTH) {
+    throw new Error(
+      `SESSION_SECRET must be at least ${MIN_SECRET_LENGTH} characters — generate a random one, do not use a passphrase`,
+    )
   }
   return secret
 }
@@ -98,6 +121,22 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
     diff |= a[i] ^ b[i]
   }
   return diff === 0
+}
+
+/**
+ * Timing-safe string comparison for the password check.
+ *
+ * Both sides are SHA-256-digested before comparing rather than fed to
+ * `constantTimeEqual` raw: its length check is fine for HMACs (fixed, public
+ * length) but on passwords it would answer "is your guess the right length?"
+ * faster than "is it the right password?" — a password-length oracle.
+ * Digests are always 32 bytes, so every comparison walks the same bytes in
+ * the same time whatever the inputs look like.
+ */
+export async function safeEqual(a: string, b: string): Promise<boolean> {
+  const digest = async (value: string): Promise<Uint8Array> =>
+    new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  return constantTimeEqual(await digest(a), await digest(b))
 }
 
 /** Signs a session token for an arbitrary issue time. Exists so tests can

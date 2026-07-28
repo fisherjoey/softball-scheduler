@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { PositionChips } from './PositionChips'
-import { savePlayer, savePositions } from '@/app/roster/actions'
+import { saveFullPlayer } from '@/app/roster/actions'
 import type { Player, Position, Tier } from '@/lib/types'
 
 export interface PlayerCardProps {
@@ -22,15 +22,24 @@ const TOGGLE_OFF = 'border-zinc-300 text-zinc-500 dark:border-zinc-700 dark:text
  * toggle. Deactivating never deletes the row, so game history referencing
  * this player survives.
  *
- * Saving calls two server actions in sequence — `savePlayer` (name/flags)
- * then `savePositions` (eligibility) — because the underlying queries are
- * separate tables. On success the form collapses its enclosing `<details>`
- * (if any) so the roster list reads as "tap to edit, save to close"; on
- * failure nothing collapses so the captain can fix and retry.
+ * Saving is a single `saveFullPlayer` action carrying name, flags, AND
+ * positions — not a savePlayer/savePositions pair. Two sequential POSTs from
+ * a phone at the diamond meant a dropped second request left a half-saved
+ * player, and retrying the first minted a duplicate. On success the form
+ * collapses its enclosing `<details>` (if any) so the roster list reads as
+ * "tap to edit, save to close"; on failure nothing collapses so the captain
+ * can fix and retry.
  */
 export function PlayerCard({ player }: PlayerCardProps) {
   const isNew = !player
   const formRef = useRef<HTMLFormElement>(null)
+
+  // The id a brand-new player will be saved under, minted client-side so a
+  // resubmit after "the save died — or did it?" reuses the SAME id and the
+  // server upsert converges on one row. Minted lazily at first submit, not
+  // at render: a render-time randomUUID() would come out different on the
+  // server render and on hydration and React would flag the mismatch.
+  const newIdRef = useRef<string | null>(null)
 
   const [positions, setPositions] = useState<Partial<Record<Position, Tier>>>(
     player?.positions ?? {},
@@ -45,11 +54,17 @@ export function PlayerCard({ player }: PlayerCardProps) {
     setError(null)
     setIsPending(true)
     try {
-      const id = await savePlayer(formData)
-      await savePositions(id, positions)
+      if (isNew) {
+        newIdRef.current ??= crypto.randomUUID()
+        formData.set('id', newIdRef.current)
+      }
+      await saveFullPlayer(formData, positions)
 
       formRef.current?.closest('details')?.removeAttribute('open')
       if (isNew) {
+        // This player exists now — drop their id so the next new player gets
+        // a fresh one instead of upserting over this row.
+        newIdRef.current = null
         formRef.current?.reset()
         setPositions({})
         setIsFemale(false)

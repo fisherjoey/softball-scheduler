@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { saveLineup } from '@/lib/db/queries'
+import { requireSession } from '@/lib/require-session'
 import type { BattingOrder, FieldingGrid } from '@/lib/types'
 
 /**
@@ -17,6 +18,7 @@ export async function persistLineup(
   grid: FieldingGrid,
   order: BattingOrder,
 ): Promise<void> {
+  await requireSession()
   await saveLineup(gameId, grid, order)
   revalidatePath(`/games/${gameId}/lineup`)
 }

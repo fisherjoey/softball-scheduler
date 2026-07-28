@@ -21,7 +21,9 @@ export default async function LineupPage({ params }: { params: Promise<{ id: str
   const [game, players, history, saved] = await Promise.all([
     getGame(id),
     listPlayers(),
-    recentSlotHistory(HISTORY_GAMES),
+    // This game is excluded from its own history: once saved, its order
+    // would otherwise rotate against itself on every rebuild.
+    recentSlotHistory(HISTORY_GAMES, id),
     getLineup(id),
   ])
   if (!game) notFound()

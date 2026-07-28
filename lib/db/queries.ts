@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 import { db } from './client'
 import { battingOrders, gameAttendance, games, playerPositions, players, lineups, lineupMeta } from './schema'
 import { toPlayer, type PlayerRow, type PositionRow } from './mappers'
@@ -75,6 +75,57 @@ export async function upsertPlayer(input: {
     })
     .returning({ id: players.id })
   return row.id
+}
+
+/**
+ * Writes a player and their eligible positions as one transaction.
+ *
+ * The caller supplies the id (new players mint one client-side) and the
+ * player write is an upsert on it, which is what makes a flaky-network retry
+ * safe: if the first attempt committed but its response was lost, the retry
+ * updates the same row and re-replaces the same positions instead of
+ * creating a duplicate who would then default to present at every game.
+ */
+export async function upsertPlayerWithPositions(
+  input: {
+    id: string
+    name: string
+    isFemale: boolean
+    isSub: boolean
+    isActive: boolean
+  },
+  positions: Partial<Record<Position, Tier>>,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(players)
+      .values({
+        id: input.id,
+        name: input.name,
+        isFemale: input.isFemale,
+        isSub: input.isSub,
+        isActive: input.isActive,
+      })
+      .onConflictDoUpdate({
+        target: players.id,
+        set: {
+          name: input.name,
+          isFemale: input.isFemale,
+          isSub: input.isSub,
+          isActive: input.isActive,
+        },
+      })
+
+    await tx.delete(playerPositions).where(eq(playerPositions.playerId, input.id))
+    const rows = Object.entries(positions).map(([position, tier]) => ({
+      playerId: input.id,
+      position,
+      tier: tier as Tier,
+    }))
+    if (rows.length > 0) {
+      await tx.insert(playerPositions).values(rows)
+    }
+  })
 }
 
 /** Replaces a player's eligible positions wholesale. */
@@ -325,12 +376,22 @@ export async function getLineup(
 /**
  * The last `limit` games with a saved batting order, newest first, folded
  * into one SlotHistory per player. Excludes subs.
+ *
+ * Pass `excludeGameId` when rebuilding a game's own lineup: once that game
+ * has a saved order it would otherwise count as one of the "recent" games —
+ * the order being rebuilt would rotate against itself and crowd a real past
+ * game out of the window.
  */
-export async function recentSlotHistory(limit = 4): Promise<SlotHistory[]> {
+export async function recentSlotHistory(limit = 4, excludeGameId?: string): Promise<SlotHistory[]> {
   const recentGames = await db
     .select({ id: games.id })
     .from(games)
-    .where(sql`exists (select 1 from ${battingOrders} where ${battingOrders.gameId} = ${games.id})`)
+    .where(
+      and(
+        excludeGameId ? ne(games.id, excludeGameId) : undefined,
+        sql`exists (select 1 from ${battingOrders} where ${battingOrders.gameId} = ${games.id})`,
+      ),
+    )
     .orderBy(desc(games.date), desc(games.createdAt))
     .limit(limit)
 

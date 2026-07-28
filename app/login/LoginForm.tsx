@@ -32,7 +32,6 @@ export function LoginForm({ notice }: LoginFormProps) {
           id="password"
           name="password"
           type="password"
-          inputMode="text"
           autoComplete="current-password"
           autoFocus
           required
