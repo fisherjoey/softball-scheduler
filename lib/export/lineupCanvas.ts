@@ -33,6 +33,30 @@ function textWidth(ctx: CanvasRenderingContext2D, text: string, bold = false): n
   return ctx.measureText(text).width
 }
 
+/**
+ * Greedy word-wrap of a note against the note font. A single word longer than
+ * `maxWidth` still gets its own (overflowing) line — the caller widens the
+ * canvas to fit it instead, because clipping mid-word is worse than a
+ * slightly wider image. Empty notes keep one blank line so the bullet still
+ * renders and the height math matches what is drawn.
+ */
+function wrapNote(ctx: CanvasRenderingContext2D, note: string, maxWidth: number): string[] {
+  ctx.font = `14px ${FONT}`
+  const lines: string[] = []
+  let line = ''
+  for (const word of note.split(/\s+/).filter((w) => w.length > 0)) {
+    const candidate = line === '' ? word : `${line} ${word}`
+    if (line !== '' && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(line)
+      line = word
+    } else {
+      line = candidate
+    }
+  }
+  lines.push(line)
+  return lines
+}
+
 /** Column widths sized to the widest cell, so nothing is ever clipped. */
 function columnWidths(ctx: CanvasRenderingContext2D, header: string[], body: string[][]): number[] {
   return header.map((h, col) => {
@@ -141,11 +165,45 @@ export function renderLineupToCanvas(
   const benchW = columnWidths(probe, benchHeader, benchBody).reduce((a, b) => a + b, 0)
 
   const lowerW = battingW + GAP + benchW
-  const contentW = Math.max(fieldW, lowerW, 420)
+
+  // The title and subtitle are single lines by design — a date + opponent
+  // header reads wrong when broken — so when they outgrow the tables they
+  // widen the whole image. They must be measured here: the canvas silently
+  // discards anything drawn past its edge, and this PNG is the share path.
+  probe.font = `700 22px ${FONT}`
+  const titleW = probe.measureText(table.title).width
+  probe.font = `15px ${FONT}`
+  const subtitleW = probe.measureText(table.subtitle).width
+
+  // Notes are prose and can run long, so they wrap rather than widening the
+  // image without bound: width is capped at the widest other element (with a
+  // 560px floor so wrapped text stays readable), and overflow becomes extra
+  // lines. The wrapping happens now, in the measure pass — resizing the
+  // canvas below wipes it, so the draw pass cannot change its mind about
+  // layout.
+  const noteWrapW = Math.max(fieldW, lowerW, titleW, 560)
+  probe.font = `14px ${FONT}`
+  const bulletIndent = probe.measureText('• ').width
+  const wrappedNotes = table.notes.map((note) => wrapNote(probe, note, noteWrapW - bulletIndent))
+  let notesW = 0
+  let noteLineCount = 0
+  for (const lines of wrappedNotes) {
+    noteLineCount += lines.length
+    lines.forEach((line, i) => {
+      // First line carries the bullet; continuations hang under the text at
+      // the same indent, so both span bulletIndent + the line itself.
+      notesW = Math.max(
+        notesW,
+        i === 0 ? probe.measureText(`• ${line}`).width : bulletIndent + probe.measureText(line).width,
+      )
+    })
+  }
+
+  const contentW = Math.max(fieldW, lowerW, titleW, subtitleW, notesW, 420)
 
   const fieldH = 26 + HEADER_H + fieldBody.length * ROW_H
   const lowerH = 26 + HEADER_H + Math.max(battingBody.length, benchBody.length) * ROW_H
-  const notesH = table.notes.length > 0 ? 24 + table.notes.length * 22 : 0
+  const notesH = table.notes.length > 0 ? 24 + noteLineCount * 22 : 0
   const contentH = 64 + fieldH + GAP + lowerH + (notesH > 0 ? GAP + notesH : 0)
 
   canvas.width = Math.ceil((contentW + PAD * 2) * scale)
@@ -182,8 +240,18 @@ export function renderLineupToCanvas(
     ctx.font = `700 16px ${FONT}`
     ctx.fillText('Notes', PAD, y)
     ctx.font = `14px ${FONT}`
-    table.notes.forEach((note, i) => {
-      ctx.fillText(`• ${note}`, PAD, y + 22 + i * 22)
+    let lineY = y + 22
+    wrappedNotes.forEach((lines) => {
+      lines.forEach((line, i) => {
+        if (i === 0) {
+          ctx.fillText(`• ${line}`, PAD, lineY)
+        } else {
+          // Hanging indent: continuation lines sit under the note's text,
+          // not under the bullet, so each note reads as one item.
+          ctx.fillText(line, PAD + bulletIndent, lineY)
+        }
+        lineY += 22
+      })
     })
   }
 
