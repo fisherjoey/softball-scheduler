@@ -4,11 +4,20 @@ import { headers } from 'next/headers'
 import { signInvite } from '@/lib/auth'
 import { requireSession } from '@/lib/require-session'
 
-// A week, not the session's 30 days: the link is a credential that travels
-// in plaintext (text messages, chat logs, server logs), so its blast radius
-// is kept small. It exists to onboard the other captain, not to be a
-// standing key — a fresh one is one tap away.
-const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * Every invite works until the season ends, full stop — Joey's call
+ * (2026-07-27), chosen over a rolling one-week lifetime with the security
+ * trade-off understood: a link sent in week one still works for the teammate
+ * who only gets around to opening it in week five.
+ *
+ * 23:59 Mountain on September 1st, expressed in UTC (MDT is UTC-6). When the
+ * date passes, minting refuses with a message naming this constant; bump it
+ * to the new season's end date. Keep it within 90 days of "now" when you do —
+ * verifyInvite caps how far out an expiry may sit (MAX_INVITE_LIFETIME_MS in
+ * lib/auth.ts), and a date beyond the cap mints links that are dead on
+ * arrival.
+ */
+const INVITE_EXPIRES_AT_MS = Date.UTC(2026, 8, 2, 5, 59)
 
 export interface InviteLink {
   /** Absolute URL to hand to a teammate. */
@@ -33,6 +42,12 @@ export interface InviteLink {
 export async function createInviteLink(): Promise<InviteLink> {
   await requireSession()
 
+  if (Date.now() >= INVITE_EXPIRES_AT_MS) {
+    throw new Error(
+      'The invite window ended September 1. Set the new season’s date (INVITE_EXPIRES_AT_MS in app/actions.ts) to share access again.',
+    )
+  }
+
   const headerStore = await headers()
   // `x-forwarded-*` is what a proxy (Vercel, nginx) sets; `host` is the direct
   // case. Both can arrive comma-joined through a chain of proxies, so take the
@@ -44,10 +59,9 @@ export async function createInviteLink(): Promise<InviteLink> {
   const forwardedProto = firstValue(headerStore.get('x-forwarded-proto'))
   const protocol = forwardedProto ?? (isLocal(host) ? 'http' : 'https')
 
-  const expiresAtMs = Date.now() + INVITE_LIFETIME_MS
-  const token = await signInvite(expiresAtMs)
+  const token = await signInvite(INVITE_EXPIRES_AT_MS)
 
-  return { url: `${protocol}://${host}/i/${token}`, expiresAtMs }
+  return { url: `${protocol}://${host}/i/${token}`, expiresAtMs: INVITE_EXPIRES_AT_MS }
 }
 
 function firstValue(header: string | null): string | undefined {
