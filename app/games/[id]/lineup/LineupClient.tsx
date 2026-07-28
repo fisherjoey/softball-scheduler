@@ -9,6 +9,7 @@ import { RosterStatusBanner } from '@/components/RosterStatusBanner'
 import { persistLineup } from './actions'
 import { applySwap, assignToCell } from '@/lib/solver/applySwap'
 import { buildBattingOrder } from '@/lib/solver/buildBattingOrder'
+import { legalReorderTargets, reorderBattingOrder } from '@/lib/solver/reorderBattingOrder'
 import { buildFieldingGrid, isAvailable } from '@/lib/solver/buildFieldingGrid'
 import { validateRoster } from '@/lib/solver/validateRoster'
 import type {
@@ -365,6 +366,51 @@ export function LineupClient({
     setDirty(true)
   }
 
+  /**
+   * A batting-order drag dropped at a new slot. The solver keeps the order
+   * legal — re-spacing the women minimally when it has to — or explains the
+   * refusal, which the list renders under the rows.
+   */
+  function reorderBatter(from: number, to: number): { error: string } | void {
+    if (!lineup) return { error: 'Generate a lineup first.' }
+    const result = reorderBattingOrder(lineup.order, present, from, to)
+    if ('error' in result) return result
+    // When the drop re-spaced the women, say so somewhere that outlives the
+    // glide animation — with reduced motion the glide never even plays, and
+    // the app moving players the captain did not touch must not be silent.
+    const note = 'The women re-spaced to keep the batting order legal after that move.'
+    const order =
+      result.repaired && !result.order.warnings.includes(note)
+        ? { ...result.order, warnings: [...result.order.warnings, note] }
+        : result.order
+    setLineup({ ...lineup, order })
+    setDirty(true)
+  }
+
+  /** Legal drop slots for a lifted batting row, for the drag's green/red tint. */
+  function legalBatterTargets(from: number): Set<number> {
+    if (!lineup) return new Set()
+    return legalReorderTargets(lineup.order, present, from)
+  }
+
+  // Warm the reorder engine's pattern cache off the interaction path: the
+  // first walk for a shape is the only expensive one, and paying it inside
+  // the drag's lift would freeze the row right as the long-press matures on
+  // a slow phone. One idle call per order makes every lift a cache hit.
+  useEffect(() => {
+    if (!lineup || lockedThrough > 0) return
+    const warm = () => {
+      const first = lineup.order.slots.findIndex((s) => s.kind === 'player')
+      if (first >= 0) legalReorderTargets(lineup.order, present, first)
+    }
+    if ('requestIdleCallback' in window) {
+      const handle = window.requestIdleCallback(warm)
+      return () => window.cancelIdleCallback(handle)
+    }
+    const timer = setTimeout(warm, 250)
+    return () => clearTimeout(timer)
+  }, [lineup, present, lockedThrough])
+
   /** Tap a cell to open its picker; tap it again to close it. */
   function selectCell(cell: GridCellRef) {
     setSwapError(null)
@@ -574,7 +620,21 @@ export function LineupClient({
             <h2 id="batting-heading" className="text-lg font-semibold text-foreground">
               Batting order
             </h2>
-            <BattingOrderList order={lineup.order} present={present} roster={roster} />
+            {lockedThrough === 0 && (
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Drag a batter to move them. If the spot needs the women re-spaced, they slide to
+                the closest legal slots on their own; a spot the rules cannot allow shows red.
+              </p>
+            )}
+            <BattingOrderList
+              order={lineup.order}
+              present={present}
+              roster={roster}
+              // Re-ordering batters mid-game is an out under the rules, so the
+              // drag is only offered before any innings are locked.
+              onReorder={lockedThrough === 0 ? reorderBatter : undefined}
+              legalTargetsFor={lockedThrough === 0 ? legalBatterTargets : undefined}
+            />
           </section>
 
           <section className="flex flex-col gap-3 pb-4" aria-labelledby="summary-heading">

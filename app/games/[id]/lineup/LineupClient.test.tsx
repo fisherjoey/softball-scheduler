@@ -456,3 +456,46 @@ describe('locking innings already played', () => {
     expect(within(lock).queryByRole('option', { name: 'Through inning 7' })).toBeNull()
   })
 })
+
+describe('batting-order reorder wiring', () => {
+  /** The list's rows, with real geometry so the drag math works in jsdom. */
+  function battingRows() {
+    const list = screen.getByTestId('batting-order')
+    const rows = Array.from(list.querySelectorAll('li'))
+    rows.forEach((row, i) => {
+      row.getBoundingClientRect = () =>
+        ({ top: i * 52, bottom: i * 52 + 44, height: 44, left: 0, right: 300, width: 300, x: 0, y: i * 52 }) as DOMRect
+    })
+    return rows
+  }
+
+  it('a drag marks the lineup unsaved and updates the list', async () => {
+    renderClient()
+    expect(screen.queryByRole('button', { name: 'Saved' })).toBeNull() // fresh = already unsaved
+    const rows = battingRows()
+    const names = rows.map((r) => r.textContent)
+    fireEvent.pointerDown(rows[1], { pointerType: 'mouse', button: 0, clientY: 74 })
+    fireEvent.pointerMove(rows[1], { pointerType: 'mouse', clientY: 92 })
+    fireEvent.pointerMove(rows[1], { pointerType: 'mouse', clientY: 150 })
+    fireEvent.pointerUp(rows[1])
+    await waitFor(() => {
+      const after = Array.from(screen.getByTestId('batting-order').querySelectorAll('li')).map(
+        (r) => r.textContent,
+      )
+      expect(after).not.toEqual(names)
+    })
+  })
+
+  it('locking any innings removes the drag entirely', async () => {
+    renderClient()
+    const lock = screen.getByRole('combobox', { name: /Innings already played/ })
+    fireEvent.change(lock, { target: { value: '1' } })
+    await waitFor(() => {
+      const list = screen.getByTestId('batting-order')
+      const row = list.querySelector('li[aria-roledescription]')
+      expect(row).toBeNull()
+    })
+    // And the drag hint copy is gone with it.
+    expect(screen.queryByText(/Drag a batter to move them/)).toBeNull()
+  })
+})

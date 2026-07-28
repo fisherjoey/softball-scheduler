@@ -36,12 +36,19 @@ start, so hover feedback is a set lookup.
 Mechanics:
 
 - Reordering never changes who bats, so the pattern's female-slot count is
-  fixed. All valid patterns for (n, femaleSpots) are walked exhaustively and
-  deterministically (own walker; `enumerateGenderPatterns` shuffles and caps
-  at `maxPatternCandidates`, which could drop the minimal-movement pattern).
-  When C(n, femaleSpots) exceeds `exhaustiveEnumerationLimit` (not reachable
-  at CSSC roster sizes ≤ 22), only outcome 1 is offered and everything else
-  refuses.
+  fixed. All valid patterns for (n, femaleSpots) are constructed exhaustively
+  and deterministically by a run-length-pruned depth-first walk (own walker;
+  `enumerateGenderPatterns` shuffles and caps at `maxPatternCandidates`,
+  which could drop the minimal-movement pattern). Pruned construction, not
+  filter-the-combinations: repeat/auto-out padding inflates slot counts past
+  roster size — 17 men + 3 women is already 25 slots, C(25,8) > 10⁶, and
+  20 men + 2 women is 30 slots, C(30,10) ≈ 3×10⁷ — so a combination filter
+  would need a size gate that silently turns repairable drags into refusals
+  (the adversarial review demonstrated exactly that). Legal patterns are
+  sparse; the pruned walk stays interactive at every reachable shape, with a
+  40-slot backstop for corrupt inputs only. Degraded single-gender orders
+  (buildBattingOrder's own fallback, pattern rules declared inapplicable)
+  reorder freely rather than consulting the walker.
 - Cost of a candidate pattern: women (in relative order, the dragged woman
   excluded when she is the drag) are matched in order to its F slots; cost is
   the sum of absolute index displacement. Lowest cost wins; ties broken by
@@ -67,9 +74,12 @@ Auto-filled women glide via FLIP on the same transition curve.
 `prefers-reduced-motion` disables all of it. No new dependency.
 
 `LineupClient` passes `onReorder`; a successful reorder updates the order,
-appends any repair note to the order's warnings surface, and marks the lineup
-unsaved, exactly like a fielding swap. Print and PNG export consume the order
-as-is and need no change.
+appends a repair note to the order's warnings when the women were re-spaced
+(the glide alone is not feedback — reduced-motion users never see it), and
+marks the lineup unsaved, exactly like a fielding swap. The drag is owned by
+one pointer id — stray fingers and palm-rejection cancels are bystanders —
+and aborts if the order changes underneath it. Print and PNG export consume
+the order as-is and need no change.
 
 ## Testing
 
