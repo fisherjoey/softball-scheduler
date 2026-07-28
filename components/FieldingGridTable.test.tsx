@@ -153,6 +153,76 @@ describe('FieldingGridTable', () => {
     expect(within(card).queryByRole('list')).toBeNull()
   })
 
+  it('shows the departed occupant in their own picker, disabled and marked', () => {
+    // The picker's options are only the players still available, so a cell
+    // whose occupant has departed opens a controlled <select> whose value has
+    // no matching option — the browser then displays the FIRST option as if it
+    // were already chosen, and that fielder becomes un-tappable because
+    // re-picking the displayed value fires no change event. The occupant gets
+    // a disabled option so the display is honest and every real choice fires.
+    const { present, grid } = setup(
+      Array.from({ length: 13 }, (_, i) => ({ name: `Player${i}` })),
+    )
+    const dropped = grid.assignments[0].P!
+    const droppedPlayer = present.find((p) => p.id === dropped)!
+    const stillPresent = present.filter((p) => p.id !== dropped)
+
+    renderGrid(stillPresent, grid, { inning: 1, position: 'P' }, {}, present)
+
+    const picker = screen.getAllByRole('combobox', {
+      name: /Who plays P in inning 1/,
+    })[0] as HTMLSelectElement
+    expect(picker.value).toBe(dropped)
+    const ghost = within(picker).getByRole('option', {
+      name: new RegExp(`${droppedPlayer.name}.*not here`),
+    }) as HTMLOptionElement
+    expect(ghost.disabled).toBe(true)
+    expect(ghost.selected).toBe(true)
+  })
+
+  it('closes when focus leaves the picker without a choice', async () => {
+    // Re-picking the current occupant fires no change event, so on phones the
+    // native sheet closes and the inline select just lingers. Focus moving on
+    // without a change is that dismissal.
+    const { present, grid } = setup()
+    const onCancel = vi.fn()
+    renderGrid(present, grid, { inning: 1, position: 'P' }, { onCancel })
+
+    await userEvent.click(screen.getAllByRole('button', { name: /C, inning 1/ })[0])
+    expect(onCancel).toHaveBeenCalled()
+  })
+
+  it('does not treat the blur that follows a choice as a dismissal', async () => {
+    const { present, grid } = setup()
+    const onCancel = vi.fn()
+    const onAssign = vi.fn()
+    renderGrid(present, grid, { inning: 1, position: 'P' }, { onAssign, onCancel })
+
+    const onField = new Set(Object.values(grid.assignments[0]))
+    const benched = present.find((p) => !onField.has(p.id))!
+    const picker = screen.getAllByRole('combobox', { name: /Who plays P in inning 1/ })[0]
+    await userEvent.selectOptions(picker, benched.id)
+    // In the app the parent closes the picker on assign; a blur-cancel racing
+    // it would be at best a duplicate state update, at worst a re-close of the
+    // picker the captain just reopened.
+    await userEvent.click(screen.getAllByRole('button', { name: /C, inning 1/ })[0])
+    expect(onAssign).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('cancels exactly once when dismissed via the ✕ button', async () => {
+    // Tapping ✕ blurs the select first. If the blur handler cancelled too,
+    // the picker would unmount under the tap and cancel twice on browsers
+    // where the click still lands.
+    const { present, grid } = setup()
+    const onCancel = vi.fn()
+    renderGrid(present, grid, { inning: 1, position: 'P' }, { onCancel })
+    await userEvent.click(
+      screen.getAllByRole('button', { name: /Cancel changing P in inning 1/ })[0],
+    )
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
   it('shows a name for a fielder who is no longer marked present', () => {
     // A saved lineup references whoever was present when it was generated.
     // Attendance can change afterwards; those players must still render by

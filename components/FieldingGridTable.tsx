@@ -111,21 +111,39 @@ function Chip({ children }: { children: React.ReactNode }) {
 function PlayerPicker({
   cell,
   current,
+  currentName,
   roster,
   onAssign,
   onCancel,
 }: {
   cell: GridCellRef
   current: string
+  /** Display name of the current occupant, resolved against the full roster. */
+  currentName: string
   roster: InningRoster
   onAssign: (cell: GridCellRef, playerId: string) => void
   onCancel: () => void
 }) {
   const ref = useRef<HTMLSelectElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const chose = useRef(false)
 
   useEffect(() => {
     const select = ref.current
     if (!select) return
+    // The grid renders every cell twice — the phone stack and the md-up table
+    // — so a selected cell mounts two of these pickers. Only one is displayed
+    // (the other's focus() no-ops on display:none), but where both are live
+    // the second must not steal focus from the first: the theft would blur
+    // it, and a blur without a choice is a dismissal now.
+    const active = document.activeElement
+    if (
+      active instanceof HTMLSelectElement &&
+      active !== select &&
+      active.getAttribute('aria-label') === select.getAttribute('aria-label')
+    ) {
+      return
+    }
     select.focus()
     // The tap that opened this picker is still transient user activation, so
     // browsers that implement showPicker() open the list immediately and the
@@ -138,18 +156,47 @@ function PlayerPicker({
     }
   }, [])
 
+  // A departed occupant is in the cell but no longer among the choices, and a
+  // controlled <select> whose value matches no option displays the FIRST
+  // option instead — as if that fielder were already swapped in, and worse,
+  // re-picking them then fires no change event. A disabled option for the
+  // real occupant keeps the display honest and every actual choice tappable.
+  const currentListed =
+    roster.fielding.some(({ player }) => player.id === current) ||
+    roster.bench.some((player) => player.id === current)
+
   return (
     <>
       <select
         ref={ref}
         value={current}
         aria-label={`Who plays ${cell.position} in inning ${cell.inning}`}
-        onChange={(event) => onAssign(cell, event.target.value)}
+        onChange={(event) => {
+          chose.current = true
+          onAssign(cell, event.target.value)
+        }}
+        onBlur={(event) => {
+          // Re-picking the current occupant fires no change event, so the
+          // "choose the same player to close" path never reaches onAssign —
+          // on phones the native sheet closes and the inline select just
+          // lingers. Focus moving on without a choice is that dismissal. Two
+          // blurs are not: the one after a choice (the picker is closing
+          // anyway), and the one from tapping ✕, whose own click handler
+          // cancels and would be unmounted before its click landed.
+          if (chose.current) return
+          if (event.relatedTarget === cancelRef.current) return
+          onCancel()
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') onCancel()
         }}
         className="min-h-11 w-full min-w-0 max-w-56 flex-1 rounded-md border-2 border-zinc-900 bg-background px-2 py-1 text-sm font-medium text-foreground dark:border-zinc-100"
       >
+        {!currentListed && (
+          <option value={current} disabled>
+            {currentName} — not here
+          </option>
+        )}
         <optgroup label="On the field">
           {roster.fielding.map(({ player, position }) => (
             <option key={player.id} value={player.id}>
@@ -170,6 +217,7 @@ function PlayerPicker({
         )}
       </select>
       <button
+        ref={cancelRef}
         type="button"
         onClick={onCancel}
         aria-label={`Cancel changing ${cell.position} in inning ${cell.inning}`}
@@ -447,6 +495,7 @@ export function FieldingGridTable({
                       <PlayerPicker
                         cell={state.cell}
                         current={grid.assignments[inning - 1][position]!}
+                        currentName={state.name!}
                         roster={rosters.get(inning)!}
                         onAssign={onAssign}
                         onCancel={onCancel}
@@ -511,6 +560,7 @@ export function FieldingGridTable({
                           <PlayerPicker
                             cell={state.cell}
                             current={grid.assignments[inning - 1][position]!}
+                            currentName={state.name!}
                             roster={rosters.get(inning)!}
                             onAssign={onAssign}
                             onCancel={onCancel}

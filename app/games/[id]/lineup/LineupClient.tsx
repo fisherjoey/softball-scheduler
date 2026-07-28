@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { BattingOrderList } from '@/components/BattingOrderList'
 import { FieldingGridTable, type GridCellRef } from '@/components/FieldingGridTable'
@@ -9,7 +9,7 @@ import { RosterStatusBanner } from '@/components/RosterStatusBanner'
 import { persistLineup } from './actions'
 import { applySwap, assignToCell } from '@/lib/solver/applySwap'
 import { buildBattingOrder } from '@/lib/solver/buildBattingOrder'
-import { buildFieldingGrid } from '@/lib/solver/buildFieldingGrid'
+import { buildFieldingGrid, isAvailable } from '@/lib/solver/buildFieldingGrid'
 import { validateRoster } from '@/lib/solver/validateRoster'
 import type {
   BattingOrder,
@@ -143,31 +143,79 @@ export function LineupClient({
     if (!lineup) return null
     const presentIds = new Set(present.map((p) => p.id))
     const nameOf = new Map(roster.map((p) => [p.id, p.name]))
-
-    // Both surfaces matter, and they hold different people: the grid names
-    // only the ten on the field, while the order names everyone who bats. A
-    // check against the grid alone misses anybody who bats without fielding.
-    const inLineup = new Set<string>([
-      ...lineup.grid.assignments.flatMap((inning) => Object.values(inning)),
-      ...lineup.order.slots.flatMap((slot) => (slot.kind === 'player' ? [slot.playerId] : [])),
-    ])
-
+    const inOrder = new Set(
+      lineup.order.slots.flatMap((slot) => (slot.kind === 'player' ? [slot.playerId] : [])),
+    )
     const byName = (a: string, b: string) => a.localeCompare(b)
-    const gone = [...inLineup]
+
+    // Departures are judged only against the surfaces the Rebuild button can
+    // still change. Innings already played legitimately keep whoever played
+    // them, and mid-game the batting order is deliberately kept too — counting
+    // either would leave this banner surviving its own fix forever. Pre-game
+    // nothing is locked, a rebuild replaces the order as well, so the order
+    // counts then; mid-game the departed player's rows carry their own
+    // "Not here" badge instead.
+    const changeable = new Set<string>(
+      lineup.grid.assignments.slice(lockedThrough).flatMap((inning) => Object.values(inning)),
+    )
+    if (lockedThrough === 0) for (const id of inOrder) changeable.add(id)
+    const gone = [...changeable]
       .filter((id) => !presentIds.has(id))
       .map((id) => nameOf.get(id) ?? id)
       .sort(byName)
-    // The dangerous direction: somebody ticked present who is nowhere in the
-    // saved lineup does not bat at all, and nothing else on this screen says so.
+
+    // The dangerous direction: everyone present must bat, and the order is the
+    // only surface that guarantees it — `buildBattingOrder` seats every present
+    // player, so order membership IS the everyone-bats invariant. Checking a
+    // union with the grid instead hid exactly the mid-game arrival this
+    // warning exists for: reshuffled into the remaining innings, absent from
+    // the deliberately-kept order, and never coming up to bat.
     const missing = present
-      .filter((p) => !inLineup.has(p.id))
+      .filter((p) => !inOrder.has(p.id))
       .map((p) => p.name)
       .sort(byName)
 
-    return gone.length || missing.length ? { gone, missing } : null
-  }, [lineup, present, roster])
+    // Present is not the whole story either: edit somebody's arrived/left
+    // window after saving and the grid may still field them in innings they
+    // are not at the park for. Played innings are skipped for the same reason
+    // they are skipped above — a rebuild cannot unplay them.
+    const misfielded = present
+      .flatMap((player) => {
+        const innings = lineup.grid.assignments.flatMap((assignment, i) =>
+          i + 1 > lockedThrough &&
+          Object.values(assignment).includes(player.id) &&
+          !isAvailable(player, i + 1)
+            ? [i + 1]
+            : [],
+        )
+        return innings.length ? [{ name: player.name, innings }] : []
+      })
+      .sort((a, b) => byName(a.name, b.name))
+
+    return gone.length || missing.length || misfielded.length
+      ? { gone, missing, misfielded }
+      : null
+  }, [lineup, present, roster, lockedThrough])
   const [genError, setGenError] = useState<string | null>(initial.error)
   const [dirty, setDirty] = useState(saved === null && initial.lineup !== null)
+
+  /**
+   * Swaps, pins and reshuffles live only in this component until Save runs.
+   * In-app links can be intercepted, but closing the tab or navigating away
+   * cannot — so while there is unsaved work, ask the browser to put up its
+   * are-you-sure dialog on the way out.
+   */
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      // Chrome ignores preventDefault() alone; the legacy returnValue channel
+      // is what actually triggers its dialog.
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   /**
    * Re-solve with the next seed.
@@ -224,6 +272,10 @@ export function LineupClient({
 
   function swap(from: GridCellRef, to: GridCellRef) {
     if (!lineup) return
+    // The UI refuses drags on locked cells and closes pickers when innings
+    // get locked, but a drag can be airborne while "Innings already played"
+    // changes underneath it — no handler may mutate an inning already played.
+    if (from.inning <= lockedThrough || to.inning <= lockedThrough) return
     const before = {
       from: lineup.grid.assignments[from.inning - 1][from.position],
       to: lineup.grid.assignments[to.inning - 1][to.position],
@@ -267,6 +319,9 @@ export function LineupClient({
    */
   function assign(cell: GridCellRef, playerId: string) {
     if (!lineup) return
+    // Same belt-and-braces as swap(): a picker that somehow survived its
+    // inning being declared played must not write into it.
+    if (cell.inning <= lockedThrough) return
     const assignment = lineup.grid.assignments[cell.inning - 1]
     const displaced = assignment[cell.position]
 
@@ -363,15 +418,31 @@ export function LineupClient({
             <p>
               <span className="font-semibold">
                 {stale.missing.join(', ')}{' '}
-                {stale.missing.length === 1 ? 'is' : 'are'} present but not in it
+                {stale.missing.length === 1 ? 'is' : 'are'} present but not in the batting order
               </span>{' '}
-              — {stale.missing.length === 1 ? 'they would' : 'they would'} not bat at all.
+              — they would not bat at all.
             </p>
           )}
           {stale.gone.length > 0 && (
             <p>
               It still uses {stale.gone.join(', ')}, who{' '}
               {stale.gone.length === 1 ? 'is' : 'are'} no longer marked present.
+            </p>
+          )}
+          {stale.misfielded.map(({ name, innings: badInnings }) => (
+            <p key={name}>
+              It fields {name} in inning{badInnings.length === 1 ? '' : 's'}{' '}
+              {badInnings.join(', ')}, which they are not here for.
+            </p>
+          ))}
+          {saved !== null && lockedThrough === 0 && (
+            // Rebuilding with nothing locked replaces every inning and the
+            // batting order. Mid-game that would throw away innings that have
+            // actually been played — and re-ordering batters mid-game is an
+            // out — so point at the lock before the captain reaches the button.
+            <p>
+              If the game is already underway, set “Innings already played” first, so the
+              innings you have played are kept as they were.
             </p>
           )}
           <button
@@ -453,11 +524,22 @@ export function LineupClient({
               Innings already played
               <select
                 value={lockedThrough}
-                onChange={(event) => setLockedThrough(Number(event.target.value))}
+                onChange={(event) => {
+                  setLockedThrough(Number(event.target.value))
+                  // A picker already open on a newly-locked inning would keep
+                  // taking assignments into an inning that has been played,
+                  // and a refusal message about the old lock state is noise.
+                  setSelected(null)
+                  setSwapError(null)
+                }}
                 className="h-11 rounded-md border border-zinc-300 bg-transparent px-2 text-base text-foreground dark:border-zinc-700"
               >
                 <option value={0}>None yet</option>
-                {Array.from({ length: innings }, (_, i) => i + 1).map((inning) => (
+                {/* Capped one short: the lock exists to protect finished
+                    innings while the rest are reshuffled, and locking every
+                    inning leaves no rest — just a no-op Reshuffle that still
+                    marks the lineup unsaved. */}
+                {Array.from({ length: innings - 1 }, (_, i) => i + 1).map((inning) => (
                   <option key={inning} value={inning}>
                     Through inning {inning}
                   </option>
@@ -465,9 +547,23 @@ export function LineupClient({
               </select>
             </label>
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Somebody just showed up, or just left?{' '}
-              <Link href={`/games/${gameId}`} className="font-semibold underline">
-                Update attendance
+              Somebody just showed up, or just left? Save the lineup, then{' '}
+              <Link
+                href={`/games/${gameId}`}
+                className="font-semibold underline"
+                onClick={() => {
+                  // Leaving for the attendance screen with unsaved swaps or
+                  // pins would silently discard them. Saving is idempotent and
+                  // the captain is standing on a diamond mid-game: fire the
+                  // save rather than interrupting with a confirm dialog. The
+                  // rejection is swallowed because navigation is already
+                  // underway and there is nobody left on this screen to tell.
+                  if (dirty && lineup) {
+                    void persistLineup(gameId, lineup.grid, lineup.order).catch(() => {})
+                  }
+                }}
+              >
+                update attendance
               </Link>
               , come back, set how many innings you have played, and Reshuffle. Those innings are
               copied across untouched.

@@ -27,6 +27,10 @@ export interface BattingOrderListProps {
  */
 export function BattingOrderList({ order, present, roster }: BattingOrderListProps) {
   const byId = new Map(roster.map((p) => [p.id, p]))
+  // Mid-game the order deliberately keeps a player who has left — re-ordering
+  // batters mid-game is an out — so the row itself is the only place that can
+  // say the slot's player is gone and the umpire gets an out there now.
+  const hereIds = new Set(present.map((p) => p.id))
   // Women may legally bat twice when the order needs more female slots than
   // there are women, so a name can repeat. Flag the repeat where it happens.
   const seen = new Set<string>()
@@ -68,6 +72,11 @@ export function BattingOrderList({ order, present, roster }: BattingOrderListPro
               {spot}
             </span>
             <span className="flex-1 text-base font-medium text-foreground">{name}</span>
+            {!hereIds.has(slot.playerId) && (
+              <span className="rounded-full border-2 border-zinc-400 px-2 py-0.5 text-xs font-bold text-zinc-700 dark:border-zinc-500 dark:text-zinc-300">
+                Not here
+              </span>
+            )}
             {repeat && (
               <span className="rounded-full border-2 border-zinc-400 px-2 py-0.5 text-xs font-bold text-zinc-700 dark:border-zinc-500 dark:text-zinc-300">
                 2nd at-bat

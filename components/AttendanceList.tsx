@@ -116,11 +116,25 @@ function PlayerAttendanceRow({
 
       {state.isPresent && (
         <div className="flex flex-wrap items-center gap-3 pl-1 text-sm">
+          {/* The two pickers clamp each other, the way a native range picker
+              does: an arrival after the departure would be a player who left
+              before turning up, which the solver could only choke on later.
+              The value just picked always wins; the other end follows. */}
           <label className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
             From inning
             <select
               value={state.arrivedInning}
-              onChange={(e) => onChange({ ...state, arrivedInning: Number(e.target.value) })}
+              onChange={(e) => {
+                const arrivedInning = Number(e.target.value)
+                onChange({
+                  ...state,
+                  arrivedInning,
+                  leftInning:
+                    state.leftInning !== null && state.leftInning < arrivedInning
+                      ? arrivedInning
+                      : state.leftInning,
+                })
+              }}
               className="h-11 rounded-md border border-zinc-300 bg-transparent px-2 text-base text-foreground dark:border-zinc-700"
             >
               {inningOptions.map((i) => (
@@ -134,12 +148,17 @@ function PlayerAttendanceRow({
             To inning
             <select
               value={state.leftInning ?? 'end'}
-              onChange={(e) =>
+              onChange={(e) => {
+                const leftInning = e.target.value === 'end' ? null : Number(e.target.value)
                 onChange({
                   ...state,
-                  leftInning: e.target.value === 'end' ? null : Number(e.target.value),
+                  leftInning,
+                  arrivedInning:
+                    leftInning !== null && leftInning < state.arrivedInning
+                      ? leftInning
+                      : state.arrivedInning,
                 })
-              }
+              }}
               className="h-11 rounded-md border border-zinc-300 bg-transparent px-2 text-base text-foreground dark:border-zinc-700"
             >
               <option value="end">End</option>
