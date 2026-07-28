@@ -9,7 +9,7 @@ import type {
 } from '@/lib/types'
 import { RULES, SOLVER, WEIGHTS } from '@/lib/rules/config'
 import { validateRoster } from './validateRoster'
-import { scoreGrid } from './scoreGrid'
+import { scoreGrid, countRelaxed } from './scoreGrid'
 import { makeRng, type Rng } from './rng'
 
 export function isAvailable(player: PresentPlayer, inning: number): boolean {
@@ -38,8 +38,6 @@ interface Attempt {
   uncoverable: Set<Position>
   /** Positions only a sub can cover, so a sub has to field. */
   subOnly: Set<Position>
-  /** How many individual assignments ignored a player's eligibility list. */
-  relaxedCount: number
 }
 
 /**
@@ -70,11 +68,19 @@ function mixSeed(seed: number, restart: number): number {
 export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
   const { present, innings, pins, seed } = input
   const restarts = input.restarts ?? SOLVER.restarts
+  const byId = new Map(present.map((p) => [p.id, p]))
   const full = validateRoster(present)
 
   const perInning = Array.from({ length: innings }, (_, i) => inningStatus(present, i + 1))
 
   const lockedThrough = input.lockedThroughInning ?? 0
+  // Locking innings without a grid to copy them from is a caller bug, and the
+  // silent reading — regenerate everything from scratch — throws away innings
+  // that have already been played. Fail loudly so the bug surfaces in
+  // development instead of as a quietly rewritten first inning at the diamond.
+  if (lockedThrough > 0 && !input.existingGrid) {
+    throw new Error('lockedThroughInning requires existingGrid')
+  }
   const locked = input.existingGrid?.assignments.slice(0, lockedThrough) ?? []
 
   let best: Attempt | null = null
@@ -91,7 +97,17 @@ export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
       const rng = makeRng(mixSeed(seed, r * 2 + (reserveCoverage ? 1 : 0)))
       const attempt = construct(input, perInning, locked, rng, reserveCoverage)
       if (!attempt) continue
-      const score = scoreGrid(attempt.assignments, present, attempt.relaxedCount)
+      // Relaxed units are recounted from the finished assignments rather than
+      // accumulated during construction. Construction only sees the positions
+      // the matching left unmatched; a pin honoured at an ineligible position
+      // and a relaxed assignment inside a locked copy are invisible to it, and
+      // an undercounted baseline makes any later rescore of the same grid
+      // (a manual swap, say) drop by 1000 per missed unit.
+      const score = scoreGrid(
+        attempt.assignments,
+        present,
+        countRelaxed(attempt.assignments, byId),
+      )
       if (score > bestScore) {
         bestScore = score
         best = attempt
@@ -111,7 +127,7 @@ export function buildFieldingGrid(input: FieldingInput): FieldingGrid {
   const warnings = [
     ...full.warnings,
     ...fieldSizeWarnings(perInning, full),
-    ...pinWarnings(present, perInning, pins, innings, locked.length),
+    ...pinWarnings(present, perInning, pins, innings, locked),
   ]
   if (best.uncoverable.size > 0) {
     warnings.push(
@@ -169,7 +185,7 @@ function pinWarnings(
   perInning: RosterStatus[],
   pins: Pin[],
   innings: number,
-  lockedCount: number,
+  locked: InningAssignment[],
 ): string[] {
   const byId = new Map(present.map((p) => [p.id, p]))
   const out: string[] = []
@@ -204,8 +220,15 @@ function pinWarnings(
     for (const pin of pins) {
       if (pin.inning !== inning) continue
 
-      if (inning <= lockedCount) {
-        reject(pin, 'that inning is locked and was copied from the existing grid')
+      if (inning <= locked.length) {
+        // A locked inning is copied verbatim, never re-solved — but the copy
+        // usually satisfies the pin already, because the pin was honoured when
+        // that inning was first generated. Warning then would tell the captain
+        // a pin failed directly under a cell showing it honoured, so only the
+        // pins the copy genuinely contradicts get the warning.
+        if (locked[inning - 1]?.[pin.position] !== pin.playerId) {
+          reject(pin, 'that inning is locked and was copied from the existing grid')
+        }
         continue
       }
       if (!status.activePositions.includes(pin.position)) {
@@ -270,7 +293,6 @@ function construct(
   const assignments: InningAssignment[] = []
   const uncoverable = new Set<Position>()
   const subOnly = new Set<Position>()
-  let relaxedCount = 0
   const inningsPlayed = new Map<string, number>(present.map((p) => [p.id, 0]))
   const positionCounts = new Map<string, number>()
 
@@ -309,7 +331,6 @@ function construct(
     if (!solved) return null
 
     assignments.push(solved.assignment)
-    relaxedCount += solved.relaxedCount
     for (const position of solved.uncoverable) uncoverable.add(position)
     for (const position of solved.subOnly) subOnly.add(position)
     for (const [position, id] of Object.entries(solved.assignment) as [Position, string][]) {
@@ -317,7 +338,7 @@ function construct(
     }
   }
 
-  return { assignments, uncoverable, subOnly, relaxedCount }
+  return { assignments, uncoverable, subOnly }
 }
 
 interface InningContext {
@@ -336,7 +357,6 @@ interface InningContext {
 
 interface SolvedInning {
   assignment: InningAssignment
-  relaxedCount: number
   uncoverable: Position[]
   subOnly: Position[]
 }
@@ -646,7 +666,7 @@ function solveInning(ctx: InningContext): SolvedInning | null {
     else if (listed.every((p) => p.isSub)) subOnly.push(position)
   }
 
-  return { assignment, relaxedCount: unmatched.length, uncoverable, subOnly }
+  return { assignment, uncoverable, subOnly }
 }
 
 /**

@@ -69,6 +69,51 @@ describe('buildBattingOrder', () => {
     expect(new Set(femaleIds).size).toBe(2)
   })
 
+  it('degrades gracefully for an all-male roster instead of throwing', () => {
+    const present = mkRoster(10, 0)
+    const order = buildBattingOrder({ present, history: [], seed: 1 })
+    const ids = order.slots.filter(isPlayerSlot).map((s) => s.playerId)
+    expect(order.slots).toHaveLength(10)
+    expect(new Set(ids)).toEqual(new Set(present.map((p) => p.id)))
+    expect(order.pattern).toEqual(Array(10).fill('M'))
+    expect(order.warnings.join(' ')).toMatch(/no women are present/i)
+  })
+
+  it('degrades gracefully for an all-female roster instead of throwing', () => {
+    const present = mkRoster(10, 10)
+    const order = buildBattingOrder({ present, history: [], seed: 2 })
+    const ids = order.slots.filter(isPlayerSlot).map((s) => s.playerId)
+    expect(order.slots).toHaveLength(10)
+    expect(new Set(ids)).toEqual(new Set(present.map((p) => p.id)))
+    expect(order.pattern).toEqual(Array(10).fill('F'))
+    expect(order.warnings.join(' ')).toMatch(/no men are present/i)
+  })
+
+  it('repeats exactly one man on a women-heavy roster, and warns about the rulebook gap', () => {
+    // 8 women, 3 men: the eight women need at least ceil((8-1)/2) = 4 male
+    // slots to keep every run legal, so one of the three men bats twice.
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const present = mkRoster(11, 8)
+      const order = buildBattingOrder({ present, history: [], seed })
+      expect(order.slots.filter((s) => s.kind === 'autoOut')).toHaveLength(0)
+      const playerIds = order.slots.filter(isPlayerSlot).map((s) => s.playerId)
+      const maleIds = playerIds.filter((id) => !present.find((p) => p.id === id)!.isFemale)
+      expect(maleIds, `seed ${seed}`).toHaveLength(4)
+      expect(new Set(maleIds).size, `seed ${seed}`).toBe(3) // exactly one man twice
+      expect(order.warnings.join(' ')).toMatch(/male/i)
+      expect(order.warnings.join(' ')).toMatch(/opposing captain/i)
+    }
+  })
+
+  it('warns about the female repeat only, on a men-heavy roster', () => {
+    // 3 women, 8 men: one woman repeats, no man does — so the rulebook-gap
+    // warning must stay silent.
+    const present = mkRoster(11, 3)
+    const order = buildBattingOrder({ present, history: [], seed: 6 })
+    expect(order.warnings.join(' ')).toMatch(/repeating a woman/i)
+    expect(order.warnings.join(' ')).not.toMatch(/male batter/i)
+  })
+
   it('rotates players off slots they held in recent games', () => {
     const present = mkRoster(12, 4)
     // p4 (male) led off the last three games.

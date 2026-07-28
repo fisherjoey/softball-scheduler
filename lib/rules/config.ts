@@ -86,7 +86,11 @@ export const WEIGHTS = {
 } as const
 
 export const SOLVER = {
-  /** Randomised restarts per generation. */
+  /**
+   * Randomised restarts per generation. Each restart runs TWO constructions —
+   * one per coverage-reservation policy (see buildFieldingGrid) — so the real
+   * construction budget is twice this number.
+   */
   restarts: 300,
   /** Retries of a single inning before abandoning a restart. */
   inningRetries: 20,

@@ -92,6 +92,25 @@ describe('validateRoster', () => {
     expect(s.activePositions).toContain('C')
   })
 
+  it('warns, by name, when inverted From/To innings leave a player with zero availability', () => {
+    // From inning 5 / To inning 2: they bat all game but are filtered out of
+    // every inning by isAvailable, so they silently field nothing.
+    const present = mkRoster(13, 5)
+    present[3] = { ...present[3], arrivedInning: 5, leftInning: 2 }
+    const s = validateRoster(present)
+    expect(s.blockers).toEqual([])
+    const zeroAvailability = s.warnings.filter((w) => w.includes('p3'))
+    expect(zeroAvailability).toHaveLength(1)
+    expect(zeroAvailability[0]).toMatch(/never field/i)
+  })
+
+  it('does not warn about zero availability for normal From/To innings', () => {
+    const present = mkRoster(13, 5)
+    present[3] = { ...present[3], arrivedInning: 2, leftInning: 5 }
+    const s = validateRoster(present)
+    expect(s.warnings.filter((w) => /never field/i.test(w))).toEqual([])
+  })
+
   it('surfaces both shortfall warnings when both conditions hold', () => {
     // 8 present, only 3 of them roster players, and only 1 roster female.
     const roster = [

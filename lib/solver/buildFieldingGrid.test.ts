@@ -170,6 +170,85 @@ describe('buildFieldingGrid', () => {
     assertLegal(second, present)
   })
 
+  it('does not warn about a pin the locked copy already honours', () => {
+    // The pin was honoured when inning 1 was first generated, so the locked
+    // copy satisfies it byte-for-byte. Warning "could not honour" under a
+    // cell that visibly shows the pin honoured is a false positive.
+    const present = mkRoster(13, 5)
+    const pins = [{ inning: 1, position: 'P' as Position, playerId: 'p5' }]
+    const first = buildFieldingGrid({ present, innings: 7, pins, seed: 30 })
+    expect(first.assignments[0].P).toBe('p5')
+
+    const second = buildFieldingGrid({
+      present,
+      innings: 7,
+      pins,
+      seed: 31,
+      lockedThroughInning: 3,
+      existingGrid: first,
+    })
+    expect(second.assignments[0].P).toBe('p5')
+    expect(second.warnings.filter((w) => /Could not honour the pin/.test(w))).toEqual([])
+    assertLegal(second, present)
+  })
+
+  it('still warns about a locked-inning pin the copy does not satisfy', () => {
+    const present = mkRoster(13, 5)
+    const first = buildFieldingGrid({ present, innings: 7, pins: [], seed: 32 })
+    // Pin somebody other than the locked pitcher into the locked inning.
+    const lockedPitcher = first.assignments[0].P!
+    const someoneElse = present.find((p) => p.id !== lockedPitcher)!.id
+    const pins = [{ inning: 1, position: 'P' as Position, playerId: someoneElse }]
+
+    const second = buildFieldingGrid({
+      present,
+      innings: 7,
+      pins,
+      seed: 33,
+      lockedThroughInning: 3,
+      existingGrid: first,
+    })
+    expect(second.assignments[0].P).toBe(lockedPitcher) // the copy wins
+    const dropped = second.warnings.filter((w) => /Could not honour the pin/.test(w))
+    expect(dropped).toHaveLength(1)
+    expect(dropped[0]).toMatch(/locked/)
+    assertLegal(second, present)
+  })
+
+  it('throws when lockedThroughInning is given without existingGrid', () => {
+    const present = mkRoster(13, 5)
+    expect(() =>
+      buildFieldingGrid({ present, innings: 7, pins: [], seed: 34, lockedThroughInning: 3 }),
+    ).toThrow(/existingGrid/)
+  })
+
+  it('scores a pin honoured at an ineligible position the same as a fresh recount', () => {
+    // Pins ignore eligibility, so pinning p5 at C when p5 is not listed there
+    // produces a relaxed assignment that unmatched-position accounting never
+    // saw. grid.score must still equal a recount from the finished grid, or
+    // any later rescore (e.g. after a manual swap) drops by 1000 per unit.
+    const withoutC = Object.fromEntries(
+      POSITIONS.filter((p) => p !== 'C').map((p) => [p, 'primary' as const]),
+    )
+    const present = mkRoster(13, 5).map((p) =>
+      p.id === 'p5' ? { ...p, positions: withoutC } : p,
+    )
+    const pins = [{ inning: 1, position: 'C' as Position, playerId: 'p5' }]
+    const grid = buildFieldingGrid({ present, innings: 7, pins, seed: 35 })
+    expect(grid.assignments[0].C).toBe('p5')
+
+    const byId = new Map(present.map((p) => [p.id, p]))
+    let relaxed = 0
+    for (const inning of grid.assignments) {
+      for (const [pos, id] of Object.entries(inning) as [Position, string][]) {
+        if (byId.get(id)!.positions[pos] === undefined) relaxed++
+      }
+    }
+    expect(relaxed).toBeGreaterThanOrEqual(1)
+    expect(grid.score).toBe(scoreGrid(grid.assignments, present, relaxed))
+    assertLegal(grid, present)
+  })
+
   it('relaxes eligibility rather than failing when nobody can cover a position', () => {
     // Nobody is eligible at catcher.
     const positionsWithoutC = Object.fromEntries(

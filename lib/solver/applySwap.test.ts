@@ -133,6 +133,73 @@ describe('applySwap', () => {
     if ('error' in result) expect(result.error).toMatch(/already/i)
   })
 
+  it('allows a swap of two present players when a ghost id sits elsewhere in the inning', () => {
+    // The shape left behind when a departed player is unticked after the grid
+    // was generated: their id is still in the inning but no longer in
+    // `present`. That pre-existing problem must not block a swap of two other
+    // players, both present and available.
+    const present = mkRoster(13, 5)
+    const byId = new Map(present.map((p) => [p.id, p]))
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 8 })
+    const copy = { ...grid, assignments: grid.assignments.map((a) => ({ ...a })) }
+    const maleSlot = (Object.entries(copy.assignments[0]) as [Position, string][]).find(
+      ([, id]) => !byId.get(id)!.isFemale,
+    )!
+    copy.assignments[0][maleSlot[0]] = 'ghost'
+
+    const others = (Object.entries(copy.assignments[0]) as [Position, string][]).filter(
+      ([position]) => position !== maleSlot[0],
+    )
+    const result = applySwap(
+      copy,
+      present,
+      { inning: 1, position: others[0][0] },
+      { inning: 1, position: others[1][0] },
+    )
+    expect(result).not.toHaveProperty('error')
+    if (!('grid' in result)) return
+    expect(result.grid.assignments[0][others[0][0]]).toBe(others[1][1])
+    expect(result.grid.assignments[0][others[1][0]]).toBe(others[0][1])
+  })
+
+  it('still refuses to move the ghost id itself', () => {
+    const present = mkRoster(13, 5)
+    const byId = new Map(present.map((p) => [p.id, p]))
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 8 })
+    const copy = { ...grid, assignments: grid.assignments.map((a) => ({ ...a })) }
+    const maleSlot = (Object.entries(copy.assignments[0]) as [Position, string][]).find(
+      ([, id]) => !byId.get(id)!.isFemale,
+    )!
+    copy.assignments[0][maleSlot[0]] = 'ghost'
+
+    const other = (Object.entries(copy.assignments[0]) as [Position, string][]).find(
+      ([position]) => position !== maleSlot[0],
+    )!
+    const result = applySwap(
+      copy,
+      present,
+      { inning: 1, position: maleSlot[0] },
+      { inning: 1, position: other[0] },
+    )
+    expect('error' in result).toBe(true)
+    if ('error' in result) expect(result.error).toMatch(/not marked present/)
+  })
+
+  it('reports a non-integer or NaN inning instead of throwing', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 9 })
+    for (const inning of [1.5, NaN]) {
+      const result = applySwap(
+        grid,
+        present,
+        { inning, position: 'P' },
+        { inning: 1, position: 'C' },
+      )
+      expect('error' in result, `inning ${inning}`).toBe(true)
+      if ('error' in result) expect(result.error).toMatch(/not part of this game/)
+    }
+  })
+
   it('reports an empty cell rather than silently dropping a fielder', () => {
     const present = mkRoster(13, 5)
     const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 7 })
@@ -276,6 +343,16 @@ describe('assignToCell', () => {
     const result = assignToCell(grid, present, { inning: 1, position: 'P' }, 'ghost')
     expect('error' in result).toBe(true)
     if ('error' in result) expect(result.error).toMatch(/not marked present/)
+  })
+
+  it('reports a non-integer or NaN inning instead of throwing', () => {
+    const present = mkRoster(13, 5)
+    const grid = buildFieldingGrid({ present, innings: 7, pins: [], seed: 20 })
+    for (const inning of [1.5, NaN]) {
+      const result = assignToCell(grid, present, { inning, position: 'P' }, 'p0')
+      expect('error' in result, `inning ${inning}`).toBe(true)
+      if ('error' in result) expect(result.error).toMatch(/not part of this game/)
+    }
   })
 
   it('reports a position nobody is playing rather than growing the defence', () => {

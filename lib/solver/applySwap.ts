@@ -1,7 +1,7 @@
 import type { FieldingGrid, InningAssignment, Position, PresentPlayer } from '@/lib/types'
 import { RULES } from '@/lib/rules/config'
 import { isAvailable, inningStatus } from './buildFieldingGrid'
-import { scoreGrid } from './scoreGrid'
+import { scoreGrid, countRelaxed } from './scoreGrid'
 
 /** One cell of the fielding grid. `inning` is 1-based. */
 export interface GridCell {
@@ -46,7 +46,14 @@ export function applySwap(
   const nameOf = (id: string) => byId.get(id)?.name ?? id
 
   for (const cell of [a, b]) {
-    if (cell.inning < 1 || cell.inning > grid.assignments.length) {
+    // Number.isInteger also rejects NaN, which slips straight through the
+    // range comparisons (NaN < 1 and NaN > length are both false) and would
+    // crash on the array index below instead of returning an error.
+    if (
+      !Number.isInteger(cell.inning) ||
+      cell.inning < 1 ||
+      cell.inning > grid.assignments.length
+    ) {
       return { error: `Inning ${cell.inning} is not part of this game.` }
     }
     if (grid.assignments[cell.inning - 1][cell.position] === undefined) {
@@ -62,8 +69,13 @@ export function applySwap(
   assignments[a.inning - 1][a.position] = playerB
   assignments[b.inning - 1][b.position] = playerA
 
+  // Both moved ids go to both checks: a player who did not land in an inning
+  // simply is not among its entries, so only the one actually there is judged.
   for (const inning of new Set([a.inning, b.inning])) {
-    const problem = checkInning(assignments[inning - 1], present, inning, byId, nameOf)
+    const problem = checkInning(assignments[inning - 1], present, inning, byId, nameOf, [
+      playerA,
+      playerB,
+    ])
     if (problem) return { error: `${problem} (inning ${inning})` }
   }
 
@@ -111,7 +123,14 @@ export function assignToCell(
   const byId = new Map(present.map((p) => [p.id, p]))
   const nameOf = (id: string) => byId.get(id)?.name ?? id
 
-  if (cell.inning < 1 || cell.inning > grid.assignments.length) {
+  // Number.isInteger also rejects NaN, which slips straight through the range
+  // comparisons (NaN < 1 and NaN > length are both false) and would crash on
+  // the array index below instead of returning an error.
+  if (
+    !Number.isInteger(cell.inning) ||
+    cell.inning < 1 ||
+    cell.inning > grid.assignments.length
+  ) {
     return { error: `Inning ${cell.inning} is not part of this game.` }
   }
   const occupant = grid.assignments[cell.inning - 1][cell.position]
@@ -150,7 +169,7 @@ export function assignToCell(
   if (elsewhere) target[elsewhere[0]] = occupant
   target[cell.position] = playerId
 
-  const problem = checkInning(target, present, cell.inning, byId, nameOf)
+  const problem = checkInning(target, present, cell.inning, byId, nameOf, [playerId])
   if (problem) return { error: `${problem} (inning ${cell.inning})` }
 
   return {
@@ -172,6 +191,14 @@ export function assignToCell(
  * the duplicate. A drag that both unbalances the counts and clones a fielder
  * is, from the captain's side of it, a drag that would not fit in that inning
  * — the count is the reason, the clone is a symptom.
+ *
+ * Presence and availability are judged only for `movedIds` — the players this
+ * gesture actually put into the inning. The rest of the inning is whatever it
+ * already was, and a pre-existing problem there (say a ghost id left behind by
+ * unticking a departed player after generating) is not something this gesture
+ * can fix; refusing an unrelated swap over it just strands the captain. The
+ * inning-wide rules — gender counts and the duplicate check — still cover
+ * everybody, since any move can push those over the line.
  */
 function checkInning(
   assignment: InningAssignment,
@@ -179,15 +206,22 @@ function checkInning(
   inning: number,
   byId: Map<string, PresentPlayer>,
   nameOf: (id: string) => string,
+  movedIds: readonly string[],
 ): string | null {
   const ids = Object.values(assignment) as string[]
+  const moved = new Set(movedIds)
   let females = 0
   let males = 0
 
   for (const id of ids) {
     const player = byId.get(id)
-    if (!player) return `${nameOf(id)} is not marked present for this game`
-    if (!isAvailable(player, inning)) {
+    if (!player) {
+      if (moved.has(id)) return `${nameOf(id)} is not marked present for this game`
+      // An unresolvable id has no gender to count. Skipping it keeps the
+      // counting rules about the players actually known to the roster.
+      continue
+    }
+    if (moved.has(id) && !isAvailable(player, inning)) {
       return `${player.name} is not available in inning ${inning}`
     }
     if (player.isFemale) females++
@@ -214,25 +248,4 @@ function checkInning(
   }
 
   return null
-}
-
-/**
- * Assignments that ignore the player's eligibility list, which is exactly what
- * `buildFieldingGrid` counts as `relaxedCount`. Recomputing it from the grid
- * keeps the score comparable to the solver's own, so a manual swap that
- * strands somebody at a position they have never played shows up as the large
- * score drop it is.
- */
-function countRelaxed(
-  assignments: InningAssignment[],
-  byId: Map<string, PresentPlayer>,
-): number {
-  let count = 0
-  for (const inning of assignments) {
-    for (const [position, id] of Object.entries(inning) as [Position, string][]) {
-      const player = byId.get(id)
-      if (player && player.positions[position] === undefined) count++
-    }
-  }
-  return count
 }

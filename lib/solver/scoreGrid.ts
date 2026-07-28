@@ -2,6 +2,33 @@ import type { InningAssignment, PresentPlayer } from '@/lib/types'
 import { WEIGHTS } from '@/lib/rules/config'
 
 /**
+ * Assignments that ignore the player's eligibility list — the `relaxedCount`
+ * the score's largest penalty is charged on.
+ *
+ * This recount from the finished assignments is the single source of truth,
+ * used both when `buildFieldingGrid` scores a restart and when a manual swap
+ * rescores the grid. Accounting accumulated during construction undercounts:
+ * it sees only positions the matching left unmatched, never a pin honoured at
+ * an ineligible position or a relaxed assignment copied in with a locked
+ * inning, so the two paths would disagree by 1000 points per missed unit.
+ */
+export function countRelaxed(
+  assignments: InningAssignment[],
+  byId: Map<string, PresentPlayer>,
+): number {
+  let count = 0
+  for (const inning of assignments) {
+    for (const [position, id] of Object.entries(inning)) {
+      const player = byId.get(id)
+      if (player && player.positions[position as keyof typeof player.positions] === undefined) {
+        count++
+      }
+    }
+  }
+  return count
+}
+
+/**
  * Higher is better. Combines the four fairness goals plus penalties.
  *
  * Equal innings deliberately ignores subs — they do not pay, so roster players

@@ -60,6 +60,10 @@ official game. The app surfaces this as a blocking banner, not a silent failure.
 - If only 2 female players are present, every 3rd female spot is an automatic out.
 - With exactly 3 female players present, the order may repeat them as needed to
   fill the required female spots.
+- On a women-heavy roster the app applies the same repeat rule to the scarce men;
+  the rulebook only explicitly authorizes repeating female players, so this is a
+  house interpretation of a rulebook gap and the app warns the captain to clear
+  it with the opposing captain.
 
 #### Derivation of required female spots
 

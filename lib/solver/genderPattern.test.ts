@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { circularRuns, isValidGenderPattern, enumerateGenderPatterns } from './genderPattern'
+import {
+  circularRuns,
+  isValidGenderPattern,
+  enumerateGenderPatterns,
+  combinationCountUpTo,
+} from './genderPattern'
 import { femaleSpotsRequired } from '@/lib/rules/femaleSpots'
 import { makeRng } from './rng'
 
@@ -61,6 +66,22 @@ describe('isValidGenderPattern', () => {
 
   it('counts a run of three women against the one-run allowance', () => {
     expect(isValidGenderPattern(parse('FFFMMMFMFM'))).toBe(false)
+  })
+})
+
+describe('combinationCountUpTo', () => {
+  it('counts the large-k side exactly instead of bailing to Infinity', () => {
+    // C(24, 16) = 735,471 — under the limit, but the naive k-step running
+    // product passes ~2.7M mid-loop before coming back down, so without the
+    // C(n, k) = C(n, n - k) reduction this reported Infinity and silently
+    // degraded enumeration to sampling.
+    expect(combinationCountUpTo(24, 16, 1_000_000)).toBe(735_471)
+    expect(combinationCountUpTo(24, 8, 1_000_000)).toBe(735_471)
+  })
+
+  it('still reports Infinity when the true count exceeds the limit', () => {
+    // C(40, 20) ≈ 1.4e11.
+    expect(combinationCountUpTo(40, 20, 1_000_000)).toBe(Infinity)
   })
 })
 

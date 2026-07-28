@@ -18,11 +18,38 @@ export function buildBattingOrder(input: BattingInput): BattingOrder {
   const women = present.filter((p) => p.isFemale)
   const men = present.filter((p) => !p.isFemale)
 
+  // A single-gender roster has no legal gender pattern at all: any run of
+  // four or more of one gender is illegal, so no arrangement of one gender
+  // can ever validate. The game page does not gate generation on roster
+  // blockers, so this has to degrade gracefully rather than crash on
+  // an empty pool below. Everyone present bats exactly once, in shuffled
+  // order, and the warning says why the pattern rules were skipped.
+  if (women.length === 0 || men.length === 0) {
+    const batters = rng.shuffle(present)
+    return {
+      slots: batters.map((p) => ({ kind: 'player' as const, playerId: p.id })),
+      pattern: batters.map((p) => (p.isFemale ? ('F' as const) : ('M' as const))),
+      warnings: [
+        women.length === 0
+          ? 'No women are present, so the gender-pattern rules cannot apply — this game is a default under CSSC minimums. Everyone bats once.'
+          : 'No men are present, so the gender-pattern rules cannot apply. Everyone bats once.',
+      ],
+    }
+  }
+
   // Whichever gender is scarcer is the one that may need to pad out its
   // slot count (via repeats, or automatic outs when it's women below the
   // league minimum) so the more numerous gender never runs longer than the
   // legal max. The abundant gender always gets exactly one slot per person
   // — it never repeats or sits out.
+  //
+  // The rulebook only authorizes the padding in one direction: "If a team
+  // only has the minimum female player requirement (3), they may construct
+  // the batting order repeating the present female players as needed."
+  // Generalizing the repeat to scarce MEN on a women-heavy roster is a house
+  // interpretation of a rulebook gap — it is the only playable reading, since
+  // the alternative is refusing to bat a legal roster — and `fillPattern`
+  // warns the captain to clear the male repeat with the opposing captain.
   //
   // With S scarce-gender slots dividing the order into S gaps, the abundant
   // gender's total is capped at S*(maxSameGenderRun - 1) + maxRunsAtMaxLength
@@ -142,6 +169,16 @@ function fillPattern(
   if (repeats > 0) {
     warnings.push(
       `${repeats} female slot${repeats === 1 ? '' : 's'} filled by repeating a woman already in the order, as the rules allow.`,
+    )
+  }
+  // Repeating a man is a house interpretation, not a rulebook rule — the
+  // rulebook only explicitly authorizes repeating female players (see the
+  // rationale at the womenAreScarcer computation). Flag it so the captain
+  // clears it before it becomes a mid-game protest.
+  const maleRepeats = manCursor - menPool.length
+  if (maleRepeats > 0) {
+    warnings.push(
+      `${maleRepeats} male slot${maleRepeats === 1 ? '' : 's'} filled by repeating a male batter already in the order. The rulebook only explicitly authorizes repeating female players — clear this with the opposing captain.`,
     )
   }
 

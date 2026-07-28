@@ -65,6 +65,18 @@ export function validateRoster(present: PresentPlayer[]): RosterStatus {
     )
   }
 
+  // Inverted From/To innings (arrived after they left) are a data-entry slip
+  // the captain would not otherwise notice: the player still bats, but
+  // isAvailable filters them out of every inning and they silently field
+  // nothing all game.
+  for (const p of present) {
+    if (p.leftInning !== null && p.leftInning < p.arrivedInning) {
+      warnings.push(
+        `${p.name} arrives in inning ${p.arrivedInning} but leaves after inning ${p.leftInning} — zero innings of availability, so they will never field. Check their From/To innings.`,
+      )
+    }
+  }
+
   return {
     playerCount,
     femaleCount,

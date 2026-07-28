@@ -58,9 +58,18 @@ export function isValidGenderPattern(pattern: Gender[]): boolean {
  * C(n, k), computed multiplicatively so it never touches a factorial. Bails
  * out to Infinity as soon as the running total exceeds `limit`, since callers
  * only care whether the true count is at or below that limit.
+ *
+ * Exported for tests only.
  */
-function combinationCountUpTo(n: number, k: number, limit: number): number {
+export function combinationCountUpTo(n: number, k: number, limit: number): number {
   if (k < 0 || k > n) return 0
+  // C(n, k) = C(n, n - k), and only the smaller side is safe to walk with an
+  // early bail-out: for k <= n/2 the running product C(n,1), C(n,2), ... is
+  // nondecreasing, so no intermediate can exceed `limit` unless the true
+  // count does. Walking the larger side can — C(24, 16) passes ~2.7M
+  // mid-loop on its way down to 735,471 — which falsely reported Infinity
+  // and silently degraded enumeration to sampling.
+  k = Math.min(k, n - k)
   let result = 1
   for (let i = 0; i < k; i++) {
     result = (result * (n - i)) / (i + 1)
