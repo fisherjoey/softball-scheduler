@@ -1,9 +1,14 @@
 # Database setup (already applied)
 
-This project shares a Supabase project (`fwckdmwwjrewwmijbwio`, "ContractTracker",
-region `us-east-1`) with a paid client billing app (Tracker). The softball scheduler
-gets its own Postgres schema and its own least-privilege role so it can never read
-or write the client's `public` tables.
+This project shares a Supabase project (region `us-east-1`) with an unrelated
+billing app. The softball scheduler gets its own Postgres schema and its own
+least-privilege role so it can never read or write the other app's `public`
+tables.
+
+The project reference is deliberately not recorded here — this repository is
+public, and naming the project would point at infrastructure holding someone
+else's data. It lives in the `softball-database-url` Bitwarden item and in the
+Vercel project's environment variables.
 
 **This setup has already been run, once, by hand, in that project's Supabase SQL
 editor.** It is recorded here for reproducibility (e.g. standing up a second
